@@ -1,9 +1,11 @@
 import { createSign } from "node:crypto";
 import type { Item } from "./extract.ts";
-import type { Diff } from "./store.ts";
+import type { Diff, Snapshot } from "./store.ts";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
+// Hidden tab holding the last good run. A1 is the run metadata as JSON, A2 down one item per row as JSON.
+const SNAPSHOT_TAB = "Snapshot";
 // Must match the spreadsheet's timezone (Asia/Karachi, UTC+5, no DST) or run times shift.
 const SHEET_UTC_OFFSET_HOURS = 5;
 
@@ -53,6 +55,37 @@ export async function pushRun(config: SheetsConfig, run: RunRecord): Promise<voi
   await append(call, "Runs!A1", [runRow(run, at, healthy)]);
 }
 
+/** The last good run from the Snapshot tab, or null when the tab is empty (the next run is a baseline). */
+export async function loadSnapshot(config: SheetsConfig, target: string): Promise<Snapshot | null> {
+  const call = await client(config);
+  const res = (await call("GET", `/values/${encodeURIComponent(`${SNAPSHOT_TAB}!A:A`)}`)) as { values?: string[][] };
+  const [metaRow, ...itemRows] = res.values ?? [];
+  if (!metaRow?.[0]) return null;
+
+  const meta = JSON.parse(metaRow[0]) as Omit<Snapshot, "items">;
+  if (meta.target !== target) {
+    throw new Error(
+      `The ${SNAPSHOT_TAB} tab holds "${meta.target}", not "${target}". One sheet serves one target; ` +
+        `clear the ${SNAPSHOT_TAB} tab only if this sheet is meant to switch targets.`,
+    );
+  }
+  // itemCount, not the row count, bounds the read: rows left over from a longer earlier run are ignored.
+  const items = itemRows.slice(0, meta.itemCount).map((row) => JSON.parse(row[0] ?? "") as Item);
+  return { ...meta, items };
+}
+
+export async function saveSnapshot(config: SheetsConfig, snapshot: Snapshot): Promise<void> {
+  const call = await client(config);
+  const { items, ...meta } = snapshot;
+  // Metadata and items land in one request, so a failure never leaves a half-written snapshot.
+  await call("POST", "/values:batchUpdate", {
+    valueInputOption: "RAW",
+    data: [{ range: `${SNAPSHOT_TAB}!A1`, values: [[JSON.stringify(meta)], ...items.map((item) => [JSON.stringify(item)])] }],
+  });
+  // Tidy only: loadSnapshot already ignores anything past itemCount.
+  await call("POST", "/values:batchClear", { ranges: [`${SNAPSHOT_TAB}!A${items.length + 2}:A`] });
+}
+
 export function itemRow(item: Item, run: RunRecord, at: number): Cell[] {
   return [...run.fieldNames.map((field) => toCell(item[field] ?? "")), run.target, at];
 }
@@ -91,7 +124,7 @@ function dateSerial(iso: string): number {
   return (Date.parse(iso) + SHEET_UTC_OFFSET_HOURS * 3_600_000) / 86_400_000 + 25569;
 }
 
-type Call = (method: string, path: string, body: unknown) => Promise<unknown>;
+type Call = (method: string, path: string, body?: unknown) => Promise<unknown>;
 
 // RAW input: a scraped value starting with "=" must land as text, never run as a formula.
 function append(call: Call, range: string, values: Cell[][]): Promise<unknown> {
@@ -105,7 +138,7 @@ async function client(config: SheetsConfig): Promise<Call> {
     const res = await fetch(`${SHEETS_API}/${config.sheetId}${path}`, {
       method,
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
     const json = (await res.json()) as { error?: { message?: string } };
     if (!res.ok) throw new Error(`Sheets ${path} → ${res.status}: ${json.error?.message ?? "unknown error"}`);

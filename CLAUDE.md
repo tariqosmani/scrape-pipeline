@@ -60,7 +60,8 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
 - **`src/fetch.ts`** — the politeness layer: robots.txt (cached per origin, honors `Crawl-delay`),
   per-request delay, retry with backoff on 429/5xx, descriptive User-Agent.
 - **`src/extract.ts`** — Cheerio extraction driven by the config's selectors, plus `fillRates()`.
-- **`src/store.ts`** — snapshot read/write to `data/<target>.json` and the keyed diff. A snapshot
+- **`src/store.ts`** — the keyed diff, plus the local snapshot file `data/<target>.json`, used only
+  when the Google vars are unset (with them, the snapshot lives in the sheet). A snapshot
   is `{ target, runAt, itemCount, fillRates, items }`; `diff()` maps both item lists by `key` and
   compares by `JSON.stringify` equality, so field order inside an item never causes a false change.
 - **`src/pipeline.ts`** — `runPipeline(target)`: one full run (crawl, health checks, snapshot, Sheets,
@@ -71,7 +72,8 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
   is `1` on purpose: a retry would append a second Runs row and send the Telegram alert twice.
 - **`src/sheets.ts`** — Google Sheets export through a service account. It signs its own JWT with
   `node:crypto` and calls the Sheets REST API with `fetch`, so there is no Google client library.
-  Skipped with a log line when the `SCRAPE_PIPELINE_*` vars are not set.
+  Skipped with a log line when the `SCRAPE_PIPELINE_*` vars are not set. Also `loadSnapshot()` /
+  `saveSnapshot()` for the hidden Snapshot tab (see Google Sheet).
 - **`src/telegram.ts`** — the "what changed" alert. `digest()` returns the message text, or `null`
   for a quiet healthy run or a baseline, so the bot only speaks when something changed, the health
   check failed, or the Sheets export failed. Plain text with no `parse_mode`, so scraped `*` or `<`
@@ -111,9 +113,14 @@ below `minItemsExpected`, any field at 0% fill, and any field whose fill rate dr
 points versus the previous run (selector drift). Any of those fails the run.
 
 **An unhealthy run writes nothing but a `Failed` row to the Runs tab.** It does not overwrite the
-local snapshot or the sheet's Items / Changes. Otherwise a partial crawl logs every missing item as
+snapshot or the sheet's Items / Changes. Otherwise a partial crawl logs every missing item as
 "Removed", and the next healthy run after a selector break logs every field as "Updated". A failed
 Sheets export also exits `1`.
+
+**The snapshot only advances after the Sheets export succeeds.** A failed export leaves the old
+snapshot, so the next run reports those changes again (possibly a duplicate Changes row) rather than
+never reporting them. **A snapshot that cannot be loaded fails the run before crawling**; treating it
+as a first run would silently swallow every change since the last good run.
 
 ## Rules
 
@@ -142,9 +149,10 @@ The GitHub repo is connected in the dashboard: **every push to `main` deploys to
 - The bundler warns `Unrecognized target environment "es2024"` from `tsconfig.json`. Harmless.
 - `npm audit` flags packages inside Trigger.dev itself; the only offered "fix" downgrades to v1/v2.
   Do not run `npm audit fix --force`.
-- **Local files do not survive.** Code is bundled into `.trigger/tmp/build-*/`, so `store.ts`'s
-  `import.meta.dirname`-relative `data/` lands in a throwaway build folder, and cloud runs keep no
-  files at all. Until the snapshot moves into the sheet, every task run is treated as a baseline.
+- **Local files do not survive.** Code is bundled into `.trigger/tmp/build-*/` (so an
+  `import.meta.dirname`-relative path lands in a throwaway build folder), and cloud runs keep no files
+  at all. That is why the snapshot lives in the sheet's Snapshot tab. Never reintroduce run state on
+  local disk.
 
 ## Known workaround
 
@@ -170,6 +178,7 @@ UTC+5 timezone — change `SHEET_UTC_OFFSET_HOURS` if the sheet's timezone ever 
 | **Items** | Title · Price · Availability · Target · Scraped At | Current dataset, one row per item. Price is a number shown as £; Scraped At is a date serial. Filter on the header. |
 | **Changes** | Detected At · Target · Change · Item · Field · Before · After | Append-only change log. Color rules match the exact words `New` / `Removed` / `Updated`. |
 | **Runs** | Run At · Target · Items · New · Removed · Updated · Fill Rates · Health · Notes | One row per run. Color rules match `Passed` / `Failed`. |
+| **Snapshot** *(hidden)* | Column A only: A1 = `{ target, runAt, itemCount, fillRates }` as JSON, A2 down = one item per row as JSON | The last good run the next run diffs against. Written in one `values:batchUpdate`; reads stop at `itemCount`, so leftover rows never count. One sheet serves one target: a different target name in A1 fails the run. Created and seeded 2026-09-17 from the 21:18 run, after checking it matched Items and the latest Runs row. |
 
 Seeded with the 2026-09-17 19:40 baseline snapshot (60 books, health Passed). **Changes is empty on
 purpose:** no real change has happened yet, and the faked diff used to test change detection was
@@ -189,9 +198,11 @@ identity: Items refreshed, a Passed row on Runs, Changes empty because nothing c
 the bot token is in `.env`, but `SCRAPE_PIPELINE_TELEGRAM_CHAT_ID` is still blank and no message has
 gone through, because Telegram is blocked on the local network (see Env vars).
 
-**Trigger.dev task registered in dev (2026-09-17)**, worker `20260917.1`; not yet run, because of the
-snapshot problem above.
+**Snapshot moved into the sheet, verified (2026-09-17).** With `data/` moved aside, `npm start` still
+reported 0 changes (not "first run") and saved the snapshot back to the Snapshot tab.
 
-Not built yet, in rough priority order: move the snapshot into a hidden "Snapshot" tab of the sheet
-(decided 2026-09-17), a schedule on the task, a second target on a real live site (SEC EDGAR), and the
-Upwork portfolio card.
+**Trigger.dev:** task registered in dev, and the first GitHub-triggered Production deploy succeeded
+(commit `9f838fb`). No task run yet in either environment; Production env vars are not set yet.
+
+Not built yet, in rough priority order: a first task run in dev and Production, a schedule on the task,
+a second target on a real live site (SEC EDGAR), and the Upwork portfolio card.

@@ -1,0 +1,25 @@
+{
+  "name": "scrape-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Scheduled web data pipeline: scrape a target site, validate, diff against the last run, report what changed.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/index.ts targets/books.json",
+    "run": "node src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "robots-parser": "^3.0.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.3",
+    "typescript": "^7.0.2"
+  }
+}

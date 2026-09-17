@@ -1,0 +1,16 @@
+{
+  "name": "books-demo",
+  "startUrl": "https://books.toscrape.com/catalogue/page-1.html",
+  "maxPages": 3,
+  "requestDelayMs": 1000,
+  "userAgent": "scrape-pipeline/0.1 (portfolio demo; +https://smartaiworkspace.tech)",
+  "itemSelector": "article.product_pod",
+  "fields": {
+    "title": { "selector": "h3 a", "attr": "title" },
+    "price": { "selector": "p.price_color" },
+    "availability": { "selector": "p.instock.availability" }
+  },
+  "key": "title",
+  "nextPageSelector": "li.next a",
+  "minItemsExpected": 40
+}

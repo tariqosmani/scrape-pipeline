@@ -18,6 +18,18 @@ Run `.ts` files directly with `node`. Because of type stripping, all type-only i
 `import type`, and TS-only runtime syntax (enums, parameter properties, namespaces) is banned.
 `tsconfig.json` enforces this with `erasableSyntaxOnly`.
 
+## Env vars
+
+This project keeps its **own `.env`** in `projects/scrape-pipeline/` (git-ignored), a deliberate
+exception to the root rule that projects read the shared root `.env`: it is built to deploy on its
+own. Keys: `SCRAPE_PIPELINE_SERVICE_ACCOUNT_EMAIL`, `SCRAPE_PIPELINE_SERVICE_ACCOUNT_PRIVATE_KEY`
+(one line, `\n` escapes kept, in double quotes), `SCRAPE_PIPELINE_SHEET_ID`. Google Sheets access is a
+service account, not an API key: an API key can only read public sheets and cannot write.
+
+The original JSON key file is kept **outside the repo** at `~/.config/scrape-pipeline/service-account.json`.
+Never place a key file inside the project: Google's default name (`invoice-472509-<id>.json`) matches
+no ignore rule and would be committed.
+
 ## Commands
 
 ```bash
@@ -44,7 +56,10 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
 - **`src/store.ts`** — snapshot read/write to `data/<target>.json` and the keyed diff. A snapshot
   is `{ target, runAt, itemCount, fillRates, items }`; `diff()` maps both item lists by `key` and
   compares by `JSON.stringify` equality, so field order inside an item never causes a false change.
-- **`src/index.ts`** — orchestration, health checks, and the run report.
+- **`src/index.ts`** — orchestration, health checks, the run report, and the Sheets push.
+- **`src/sheets.ts`** — Google Sheets export through a service account. It signs its own JWT with
+  `node:crypto` and calls the Sheets REST API with `fetch`, so there is no Google client library.
+  Skipped with a log line when the `SCRAPE_PIPELINE_*` vars are not set.
 
 ## Target config format
 
@@ -74,9 +89,14 @@ Omit `attr` to take the element's text.
 ## Health checks (the differentiating feature)
 
 A scraper that returns HTTP 200 with empty fields is the failure everyone gets burned by. Before
-reporting success this checks: zero items extracted, item count below `minItemsExpected`, any
-field at 0% fill, and any field whose fill rate dropped more than 50 points versus the previous
-run (selector drift). Any of those fails the run.
+reporting success this checks: any page that failed to load, zero items extracted, item count
+below `minItemsExpected`, any field at 0% fill, and any field whose fill rate dropped more than 50
+points versus the previous run (selector drift). Any of those fails the run.
+
+**An unhealthy run writes nothing but a `Failed` row to the Runs tab.** It does not overwrite the
+local snapshot or the sheet's Items / Changes. Otherwise a partial crawl logs every missing item as
+"Removed", and the next healthy run after a selector break logs every field as "Updated". A failed
+Sheets export also exits `1`.
 
 ## Rules
 
@@ -99,11 +119,38 @@ run (selector drift). Any of those fails the run.
 export, so the module types as non-callable). `src/fetch.ts` restates the runtime signature and
 casts. Remove that cast if upstream fixes the typings.
 
+## Google Sheet (output destination)
+
+**"Scrape Pipeline — Data Feed"** — ID `1IRCSdaUuFZKBOvFb3qUEo_snI_PP89MkZhrNpmrdIgk`
+(https://docs.google.com/spreadsheets/d/1IRCSdaUuFZKBOvFb3qUEo_snI_PP89MkZhrNpmrdIgk/edit).
+Created 2026-09-17 with the `gws` CLI, timezone Asia/Karachi. **The Sheets export must write to
+this sheet and these columns — do not create a new sheet.**
+
+Written by the service account `scrape-pipeline@invoice-472509.iam.gserviceaccount.com`. It lives in
+GCP project **`invoice-472509`**, not `tariq-aios`, and the Google Sheets API is enabled there. It is
+shared on the sheet as **Editor**; without that share every write fails with
+`403: The caller does not have permission`. The date serials in `sheets.ts` assume the sheet's
+UTC+5 timezone — change `SHEET_UTC_OFFSET_HOURS` if the sheet's timezone ever changes.
+
+| Tab | Columns | Behavior |
+|---|---|---|
+| **Items** | Title · Price · Availability · Target · Scraped At | Current dataset, one row per item. Price is a number shown as £; Scraped At is a date serial. Filter on the header. |
+| **Changes** | Detected At · Target · Change · Item · Field · Before · After | Append-only change log. Color rules match the exact words `New` / `Removed` / `Updated`. |
+| **Runs** | Run At · Target · Items · New · Removed · Updated · Fill Rates · Health · Notes | One row per run. Color rules match `Passed` / `Failed`. |
+
+Seeded with the 2026-09-17 19:40 baseline snapshot (60 books, health Passed). **Changes is empty on
+purpose:** no real change has happened yet, and the faked diff used to test change detection was
+never written to the sheet. Keep it that way — portfolio screenshots only show real data.
+
+Write scraped values with `valueInputOption: RAW`. `USER_ENTERED` would execute a scraped value
+that starts with `=` as a formula.
+
 ## Status
 
-**Scaffold working, verified end to end.** The demo target pulls 60 items across 3 pages, diffs
-against the previous snapshot, and fails correctly on a broken selector.
+**Scrape → diff → Google Sheet working, verified end to end (2026-09-17).** The demo target pulls
+60 items across 3 pages, diffs against the previous snapshot, fails correctly on a broken selector,
+and each run writes itself into the sheet. Verified by reading the sheet back through a separate
+identity: Items refreshed, a Passed row on Runs, Changes empty because nothing changed.
 
-Not built yet, in rough priority order: Google Sheets export (the deliverable clients actually
-ask for), an email/Telegram "what changed" digest, scheduling, a second target on a real live
-site (SEC EDGAR), and the Upwork portfolio card.
+Not built yet, in rough priority order: an email/Telegram "what changed" digest, scheduling, a
+second target on a real live site (SEC EDGAR), and the Upwork portfolio card.

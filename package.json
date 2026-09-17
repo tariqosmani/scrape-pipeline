@@ -10,16 +10,20 @@
   "scripts": {
     "start": "node src/index.ts targets/books.json",
     "run": "node src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev:trigger": "trigger dev"
   },
   "license": "MIT",
   "dependencies": {
+    "@trigger.dev/sdk": "4.6.3",
     "cheerio": "^1.2.0",
     "robots-parser": "^3.0.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@trigger.dev/build": "4.6.3",
     "@types/node": "^22.20.3",
+    "trigger.dev": "4.6.3",
     "typescript": "^7.0.2"
   }
 }

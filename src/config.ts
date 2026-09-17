@@ -22,9 +22,14 @@ export const targetSchema = z.object({
 export type Target = z.infer<typeof targetSchema>;
 
 export async function loadTarget(path: string): Promise<Target> {
-  const parsed = targetSchema.safeParse(JSON.parse(await readFile(path, "utf8")));
+  return parseTarget(JSON.parse(await readFile(path, "utf8")), path);
+}
+
+/** Validates an already-loaded target, e.g. one a Trigger.dev task imports into its bundle. */
+export function parseTarget(raw: unknown, source: string): Target {
+  const parsed = targetSchema.safeParse(raw);
   if (!parsed.success) {
-    throw new Error(`Invalid target config ${path}:\n${z.prettifyError(parsed.error)}`);
+    throw new Error(`Invalid target config ${source}:\n${z.prettifyError(parsed.error)}`);
   }
   if (!(parsed.data.key in parsed.data.fields)) {
     throw new Error(`Target "${parsed.data.name}": key "${parsed.data.key}" is not one of the configured fields.`);

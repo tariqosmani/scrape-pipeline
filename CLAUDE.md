@@ -42,6 +42,7 @@ no ignore rule and would be committed.
 npm start                          # run the books.toscrape.com demo target
 npm run run -- targets/<name>.json # run any other target
 npm run typecheck                  # tsc --noEmit (types only; nothing is emitted)
+npm run dev:trigger                # Trigger.dev dev server: runs tasks locally against the dev environment
 ```
 
 Exit code is `0` when the run is healthy and `1` when a health check, the Sheets export, or the
@@ -62,7 +63,12 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
 - **`src/store.ts`** — snapshot read/write to `data/<target>.json` and the keyed diff. A snapshot
   is `{ target, runAt, itemCount, fillRates, items }`; `diff()` maps both item lists by `key` and
   compares by `JSON.stringify` equality, so field order inside an item never causes a false change.
-- **`src/index.ts`** — orchestration, health checks, the run report, the Sheets push, and the alert.
+- **`src/pipeline.ts`** — `runPipeline(target)`: one full run (crawl, health checks, snapshot, Sheets,
+  Telegram). Returns `{ ok, failures, ... }` and never exits the process, so both entry points share it.
+- **`src/index.ts`** — CLI entry point: loads `.env`, reads the target file, exits `1` when the run fails.
+- **`src/trigger/scrape.ts`** — Trigger.dev task `scrape-books-demo`. Imports `targets/books.json` into
+  the bundle (no file read at runtime) and throws on failure so the run shows Failed. `retry.maxAttempts`
+  is `1` on purpose: a retry would append a second Runs row and send the Telegram alert twice.
 - **`src/sheets.ts`** — Google Sheets export through a service account. It signs its own JWT with
   `node:crypto` and calls the Sheets REST API with `fetch`, so there is no Google client library.
   Skipped with a log line when the `SCRAPE_PIPELINE_*` vars are not set.
@@ -121,8 +127,24 @@ Sheets export also exits `1`.
 - **Plain HTTP first.** Only reach for a headless browser when content is genuinely client-rendered.
   Playwright is deliberately *not* a dependency yet — do not add it until a target needs it.
 - **No personal contact data** in demo targets (GDPR exposure; CNIL fined Kaspr €240k for this).
-- Keep dependencies minimal. Current set: `cheerio`, `zod`, `robots-parser`. Node's built-in
-  `fetch` covers HTTP.
+- Keep dependencies minimal. Current set: `cheerio`, `zod`, `robots-parser`, `@trigger.dev/sdk`. Node's
+  built-in `fetch` covers HTTP.
+
+## Trigger.dev
+
+Project **"Upwork Trigger"** (`proj_rozkxmfiedxeuvegkfph`, org Smart AI Workspace), runtime `node-24`.
+The GitHub repo is connected in the dashboard: **every push to `main` deploys to Production.**
+
+- `@trigger.dev/sdk`, `@trigger.dev/build` and `trigger.dev` are pinned to the **exact same version**
+  (no `^`). Without a TTY the CLI treats the run as CI and aborts on any version mismatch.
+- `.env` is not deployed. Production needs the `SCRAPE_PIPELINE_*` vars set in the dashboard
+  (Production environment → Environment Variables); without them a run skips Sheets and Telegram.
+- The bundler warns `Unrecognized target environment "es2024"` from `tsconfig.json`. Harmless.
+- `npm audit` flags packages inside Trigger.dev itself; the only offered "fix" downgrades to v1/v2.
+  Do not run `npm audit fix --force`.
+- **Local files do not survive.** Code is bundled into `.trigger/tmp/build-*/`, so `store.ts`'s
+  `import.meta.dirname`-relative `data/` lands in a throwaway build folder, and cloud runs keep no
+  files at all. Until the snapshot moves into the sheet, every task run is treated as a baseline.
 
 ## Known workaround
 
@@ -167,5 +189,9 @@ identity: Items refreshed, a Passed row on Runs, Changes empty because nothing c
 the bot token is in `.env`, but `SCRAPE_PIPELINE_TELEGRAM_CHAT_ID` is still blank and no message has
 gone through, because Telegram is blocked on the local network (see Env vars).
 
-Not built yet, in rough priority order: scheduling on a host that can reach Telegram, a second
-target on a real live site (SEC EDGAR), and the Upwork portfolio card.
+**Trigger.dev task registered in dev (2026-09-17)**, worker `20260917.1`; not yet run, because of the
+snapshot problem above.
+
+Not built yet, in rough priority order: move the snapshot into a hidden "Snapshot" tab of the sheet
+(decided 2026-09-17), a schedule on the task, a second target on a real live site (SEC EDGAR), and the
+Upwork portfolio card.

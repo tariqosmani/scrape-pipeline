@@ -23,8 +23,14 @@ Run `.ts` files directly with `node`. Because of type stripping, all type-only i
 This project keeps its **own `.env`** in `projects/scrape-pipeline/` (git-ignored), a deliberate
 exception to the root rule that projects read the shared root `.env`: it is built to deploy on its
 own. Keys: `SCRAPE_PIPELINE_SERVICE_ACCOUNT_EMAIL`, `SCRAPE_PIPELINE_SERVICE_ACCOUNT_PRIVATE_KEY`
-(one line, `\n` escapes kept, in double quotes), `SCRAPE_PIPELINE_SHEET_ID`. Google Sheets access is a
-service account, not an API key: an API key can only read public sheets and cannot write.
+(in double quotes, either one line with `\n` escapes or the PEM across real lines; both load),
+`SCRAPE_PIPELINE_SHEET_ID`, `SCRAPE_PIPELINE_TELEGRAM_BOT_TOKEN`, `SCRAPE_PIPELINE_TELEGRAM_CHAT_ID`.
+Google Sheets access is a service account, not an API key: an API key can only read public sheets
+and cannot write.
+
+**Telegram is blocked on Tariq's local network.** `api.telegram.org` resets the TLS handshake while
+Google and GitHub work, so a local run cannot send an alert or call `getUpdates`. Test the Telegram
+path from the deploy host or over a VPN, not from this PC.
 
 The original JSON key file is kept **outside the repo** at `~/.config/scrape-pipeline/service-account.json`.
 Never place a key file inside the project: Google's default name (`invoice-472509-<id>.json`) matches
@@ -38,8 +44,8 @@ npm run run -- targets/<name>.json # run any other target
 npm run typecheck                  # tsc --noEmit (types only; nothing is emitted)
 ```
 
-Exit code is `0` when the run is healthy and `1` when a health check fails, so cron or CI
-catches a broken scrape instead of logging success over empty data.
+Exit code is `0` when the run is healthy and `1` when a health check, the Sheets export, or the
+Telegram alert fails, so cron or CI catches a broken scrape instead of logging success over empty data.
 
 ## Architecture
 
@@ -56,10 +62,15 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
 - **`src/store.ts`** — snapshot read/write to `data/<target>.json` and the keyed diff. A snapshot
   is `{ target, runAt, itemCount, fillRates, items }`; `diff()` maps both item lists by `key` and
   compares by `JSON.stringify` equality, so field order inside an item never causes a false change.
-- **`src/index.ts`** — orchestration, health checks, the run report, and the Sheets push.
+- **`src/index.ts`** — orchestration, health checks, the run report, the Sheets push, and the alert.
 - **`src/sheets.ts`** — Google Sheets export through a service account. It signs its own JWT with
   `node:crypto` and calls the Sheets REST API with `fetch`, so there is no Google client library.
   Skipped with a log line when the `SCRAPE_PIPELINE_*` vars are not set.
+- **`src/telegram.ts`** — the "what changed" alert. `digest()` returns the message text, or `null`
+  for a quiet healthy run or a baseline, so the bot only speaks when something changed, the health
+  check failed, or the Sheets export failed. Plain text with no `parse_mode`, so scraped `*` or `<`
+  cannot break the message. Capped at 15 change lines and Telegram's 4096 characters. Skipped when
+  either `SCRAPE_PIPELINE_TELEGRAM_*` var is unset.
 
 ## Target config format
 
@@ -152,5 +163,9 @@ that starts with `=` as a formula.
 and each run writes itself into the sheet. Verified by reading the sheet back through a separate
 identity: Items refreshed, a Passed row on Runs, Changes empty because nothing changed.
 
-Not built yet, in rough priority order: an email/Telegram "what changed" digest, scheduling, a
-second target on a real live site (SEC EDGAR), and the Upwork portfolio card.
+**Telegram alert built, not yet sent for real (2026-09-17).** The message text is checked offline;
+the bot token is in `.env`, but `SCRAPE_PIPELINE_TELEGRAM_CHAT_ID` is still blank and no message has
+gone through, because Telegram is blocked on the local network (see Env vars).
+
+Not built yet, in rough priority order: scheduling on a host that can reach Telegram, a second
+target on a real live site (SEC EDGAR), and the Upwork portfolio card.

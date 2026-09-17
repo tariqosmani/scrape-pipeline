@@ -2,8 +2,9 @@ import path from "node:path";
 import { loadTarget } from "./config.ts";
 import { crawlDelayMs, isAllowed, politeFetch, sleep } from "./fetch.ts";
 import { extractPage, fillRates, type Item } from "./extract.ts";
-import { pushRun, sheetsConfigFromEnv } from "./sheets.ts";
+import { pushRun, sheetsConfigFromEnv, type RunRecord } from "./sheets.ts";
 import { diff, loadPrevious, save } from "./store.ts";
+import { digest, sendMessage, telegramConfigFromEnv } from "./telegram.ts";
 
 const FILL_RATE_DROP_LIMIT = 0.5;
 
@@ -91,28 +92,47 @@ console.log(
 );
 console.log(`  snapshot:   ${file}`);
 
+const run: RunRecord = {
+  target: target.name,
+  runAt,
+  key: target.key,
+  fieldNames,
+  items,
+  fillRates: rates,
+  isBaseline: previous === null,
+  changes,
+  problems,
+};
+
 let exportError: string | null = null;
 const sheets = sheetsConfigFromEnv();
 if (sheets) {
   try {
-    await pushRun(sheets, {
-      target: target.name,
-      runAt,
-      key: target.key,
-      fieldNames,
-      items,
-      fillRates: rates,
-      isBaseline: previous === null,
-      changes,
-      problems,
-    });
-    console.log(`  sheet:      updated (${healthy ? "Items, Changes, Runs" : "Runs only, run was unhealthy"})\n`);
+    await pushRun(sheets, run);
+    console.log(`  sheet:      updated (${healthy ? "Items, Changes, Runs" : "Runs only, run was unhealthy"})`);
   } catch (error) {
     exportError = error instanceof Error ? error.message : String(error);
-    console.log(`  sheet:      FAILED\n`);
+    console.log(`  sheet:      FAILED`);
   }
 } else {
-  console.log(`  sheet:      skipped (SCRAPE_PIPELINE_* credentials not set)\n`);
+  console.log(`  sheet:      skipped (SCRAPE_PIPELINE_* Google credentials not set)`);
+}
+
+let alertError: string | null = null;
+const telegram = telegramConfigFromEnv();
+const message = digest(run, sheets && `https://docs.google.com/spreadsheets/d/${sheets.sheetId}/edit`, exportError);
+if (!telegram) {
+  console.log(`  telegram:   skipped (SCRAPE_PIPELINE_TELEGRAM_* not set)\n`);
+} else if (!message) {
+  console.log(`  telegram:   nothing to report\n`);
+} else {
+  try {
+    await sendMessage(telegram, message);
+    console.log(`  telegram:   alert sent\n`);
+  } catch (error) {
+    alertError = error instanceof Error ? error.message : String(error);
+    console.log(`  telegram:   FAILED\n`);
+  }
 }
 
 for (const change of changes.changed.slice(0, 10)) {
@@ -126,7 +146,8 @@ if (!healthy) {
   console.error("");
 }
 if (exportError) console.error(`\nGOOGLE SHEETS EXPORT FAILED: ${exportError}\n`);
-if (!healthy || exportError) process.exit(1);
+if (alertError) console.error(`\nTELEGRAM ALERT FAILED: ${alertError}\n`);
+if (!healthy || exportError || alertError) process.exit(1);
 
 console.log("Health check passed.\n");
 

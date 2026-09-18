@@ -24,13 +24,13 @@ This project keeps its **own `.env`** in `projects/scrape-pipeline/` (git-ignore
 exception to the root rule that projects read the shared root `.env`: it is built to deploy on its
 own. Keys: `SCRAPE_PIPELINE_SERVICE_ACCOUNT_EMAIL`, `SCRAPE_PIPELINE_SERVICE_ACCOUNT_PRIVATE_KEY`
 (in double quotes, either one line with `\n` escapes or the PEM across real lines; both load),
-`SCRAPE_PIPELINE_SHEET_ID`, `SCRAPE_PIPELINE_TELEGRAM_BOT_TOKEN`, `SCRAPE_PIPELINE_TELEGRAM_CHAT_ID`.
-Google Sheets access is a service account, not an API key: an API key can only read public sheets
-and cannot write.
+`SCRAPE_PIPELINE_SHEET_ID`, `SCRAPE_PIPELINE_SLACK_WEBHOOK_URL`. Google Sheets access is a service
+account, not an API key: an API key can only read public sheets and cannot write.
 
-**Telegram is blocked on Tariq's local network.** `api.telegram.org` resets the TLS handshake while
-Google and GitHub work, so a local run cannot send an alert or call `getUpdates`. Test the Telegram
-path from the deploy host or over a VPN, not from this PC.
+**Alerts go to Slack, not Telegram (switched 2026-09-18).** Telegram was dropped partly because
+`api.telegram.org` is blocked on Tariq's local network (TLS handshake reset), so it could never be
+tested from this PC. Slack's `hooks.slack.com` is reachable here. The old `SCRAPE_PIPELINE_TELEGRAM_*`
+lines may still sit in `.env`; nothing reads them.
 
 The original JSON key file is kept **outside the repo** at `~/.config/scrape-pipeline/service-account.json`.
 Never place a key file inside the project: Google's default name (`invoice-472509-<id>.json`) matches
@@ -46,7 +46,7 @@ npm run dev:trigger                # Trigger.dev dev server: runs tasks locally 
 ```
 
 Exit code is `0` when the run is healthy and `1` when a health check, the Sheets export, or the
-Telegram alert fails, so cron or CI catches a broken scrape instead of logging success over empty data.
+Slack alert fails, so cron or CI catches a broken scrape instead of logging success over empty data.
 
 ## Architecture
 
@@ -65,20 +65,22 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
   is `{ target, runAt, itemCount, fillRates, items }`; `diff()` maps both item lists by `key` and
   compares by `JSON.stringify` equality, so field order inside an item never causes a false change.
 - **`src/pipeline.ts`** — `runPipeline(target)`: one full run (crawl, health checks, snapshot, Sheets,
-  Telegram). Returns `{ ok, failures, ... }` and never exits the process, so both entry points share it.
+  Slack). Returns `{ ok, failures, ... }` and never exits the process, so both entry points share it.
 - **`src/index.ts`** — CLI entry point: loads `.env`, reads the target file, exits `1` when the run fails.
 - **`src/trigger/scrape.ts`** — Trigger.dev task `scrape-books-demo`. Imports `targets/books.json` into
   the bundle (no file read at runtime) and throws on failure so the run shows Failed. `retry.maxAttempts`
-  is `1` on purpose: a retry would append a second Runs row and send the Telegram alert twice.
+  is `1` on purpose: a retry would append a second Runs row and send the Slack alert twice.
 - **`src/sheets.ts`** — Google Sheets export through a service account. It signs its own JWT with
   `node:crypto` and calls the Sheets REST API with `fetch`, so there is no Google client library.
   Skipped with a log line when the `SCRAPE_PIPELINE_*` vars are not set. Also `loadSnapshot()` /
   `saveSnapshot()` for the hidden Snapshot tab (see Google Sheet).
-- **`src/telegram.ts`** — the "what changed" alert. `digest()` returns the message text, or `null`
-  for a quiet healthy run or a baseline, so the bot only speaks when something changed, the health
-  check failed, or the Sheets export failed. Plain text with no `parse_mode`, so scraped `*` or `<`
-  cannot break the message. Capped at 15 change lines and Telegram's 4096 characters. Skipped when
-  either `SCRAPE_PIPELINE_TELEGRAM_*` var is unset.
+- **`src/slack.ts`** — the "what changed" alert, posted to a Slack incoming webhook. `digest()` returns
+  the message text, or `null` for a quiet healthy run or a baseline, so the channel only hears about it
+  when something changed, the health check failed, or the Sheets export failed. Sent with
+  `mrkdwn: false` and `&` `<` `>` escaped, so a scraped `<!channel>` or `<url|text>` cannot ping the
+  channel or fake a link. Capped at 15 change lines and 4096 characters. Errors carry Slack's reason
+  (`no_service`, `invalid_payload`) but never the webhook URL, which is the secret. Skipped when
+  `SCRAPE_PIPELINE_SLACK_WEBHOOK_URL` is unset.
 
 ## Target config format
 
@@ -145,7 +147,7 @@ The GitHub repo is connected in the dashboard: **every push to `main` deploys to
 - `@trigger.dev/sdk`, `@trigger.dev/build` and `trigger.dev` are pinned to the **exact same version**
   (no `^`). Without a TTY the CLI treats the run as CI and aborts on any version mismatch.
 - `.env` is not deployed. Production needs the `SCRAPE_PIPELINE_*` vars set in the dashboard
-  (Production environment → Environment Variables); without them a run skips Sheets and Telegram.
+  (Production environment → Environment Variables); without them a run skips Sheets and Slack.
 - The bundler warns `Unrecognized target environment "es2024"` from `tsconfig.json`. Harmless.
 - `npm audit` flags packages inside Trigger.dev itself; the only offered "fix" downgrades to v1/v2.
   Do not run `npm audit fix --force`.
@@ -194,15 +196,23 @@ that starts with `=` as a formula.
 and each run writes itself into the sheet. Verified by reading the sheet back through a separate
 identity: Items refreshed, a Passed row on Runs, Changes empty because nothing changed.
 
-**Telegram alert built, not yet sent for real (2026-09-17).** The message text is checked offline;
-the bot token is in `.env`, but `SCRAPE_PIPELINE_TELEGRAM_CHAT_ID` is still blank and no message has
-gone through, because Telegram is blocked on the local network (see Env vars).
+**Slack alert working (2026-09-18).** Replaced the Telegram alert. The message text, the escaping,
+and the error path are checked offline against a local fake webhook, and a test message through
+`sendMessage` reached the real channel (HTTP 200). The webhook belongs to Tariq's existing Slack app
+(Smart AI Workspace, app ID `A0ASA67NYAF`) with Incoming Webhooks switched on. No change alert has fired
+yet: books.toscrape.com never changes.
 
 **Snapshot moved into the sheet, verified (2026-09-17).** With `data/` moved aside, `npm start` still
 reported 0 changes (not "first run") and saved the snapshot back to the Snapshot tab.
 
-**Trigger.dev:** task registered in dev, and the first GitHub-triggered Production deploy succeeded
-(commit `9f838fb`). No task run yet in either environment; Production env vars are not set yet.
+**Trigger.dev dev run verified (2026-09-18).** A dashboard Test run (`run_06gb85aa4clstqjbjdicuflc01`)
+succeeded in 12s: 60 items, 0 changes, a Passed row on Runs at 15:35, and the Snapshot tab advanced.
+`trigger dev` loads the project `.env` into local runs on its own. A Development run only executes while
+`npm run dev:trigger` is running on this PC; otherwise it waits as Queued.
 
-Not built yet, in rough priority order: a first task run in dev and Production, a schedule on the task,
-a second target on a real live site (SEC EDGAR), and the Upwork portfolio card.
+Production deploys succeed on every push (latest `f3f62b9`), but Production has not run yet: its env
+vars are not set in the dashboard.
+
+Not built yet, in rough priority order: Production env vars and a first Production run, a schedule on
+the task, a second target on a real live site (SEC
+EDGAR), and the Upwork portfolio card.

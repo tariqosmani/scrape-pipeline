@@ -5,7 +5,7 @@ import { runPipeline } from "../pipeline.ts";
 
 export const scrapeBooksDemo = task({
   id: "scrape-books-demo",
-  // No task-level retry: a retry would write the Runs row and send the Telegram alert again.
+  // No task-level retry: a retry would write the Runs row and send the Slack alert again.
   // Transient HTTP errors are already retried inside fetch.ts.
   retry: { maxAttempts: 1 },
   run: async () => {

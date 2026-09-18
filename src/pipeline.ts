@@ -3,7 +3,7 @@ import { crawlDelayMs, isAllowed, politeFetch, sleep } from "./fetch.ts";
 import { extractPage, fillRates, type Item } from "./extract.ts";
 import { loadSnapshot, pushRun, saveSnapshot, sheetsConfigFromEnv, type RunRecord } from "./sheets.ts";
 import { diff, loadPrevious, save, type Snapshot } from "./store.ts";
-import { digest, sendMessage, telegramConfigFromEnv } from "./telegram.ts";
+import { digest, sendMessage, slackWebhookFromEnv } from "./slack.ts";
 
 const FILL_RATE_DROP_LIMIT = 0.5;
 
@@ -17,7 +17,7 @@ export type PipelineResult = {
   updated: number;
 };
 
-/** One full run: crawl, health checks, snapshot, Sheets, Telegram. Returns failures instead of exiting, so the CLI and the Trigger.dev task each decide what a failure means. */
+/** One full run: crawl, health checks, snapshot, Sheets, Slack. Returns failures instead of exiting, so the CLI and the Trigger.dev task each decide what a failure means. */
 export async function runPipeline(target: Target): Promise<PipelineResult> {
   const fieldNames = Object.keys(target.fields);
   const sheets = sheetsConfigFromEnv();
@@ -123,19 +123,19 @@ export async function runPipeline(target: Target): Promise<PipelineResult> {
   }
 
   let alertError: string | null = null;
-  const telegram = telegramConfigFromEnv();
+  const slack = slackWebhookFromEnv();
   const message = digest(run, sheets && `https://docs.google.com/spreadsheets/d/${sheets.sheetId}/edit`, exportError);
-  if (!telegram) {
-    console.log(`  telegram:   skipped (SCRAPE_PIPELINE_TELEGRAM_* not set)\n`);
+  if (!slack) {
+    console.log(`  slack:      skipped (SCRAPE_PIPELINE_SLACK_WEBHOOK_URL not set)\n`);
   } else if (!message) {
-    console.log(`  telegram:   nothing to report\n`);
+    console.log(`  slack:      nothing to report\n`);
   } else {
     try {
-      await sendMessage(telegram, message);
-      console.log(`  telegram:   alert sent\n`);
+      await sendMessage(slack, message);
+      console.log(`  slack:      alert sent\n`);
     } catch (error) {
       alertError = error instanceof Error ? error.message : String(error);
-      console.log(`  telegram:   FAILED\n`);
+      console.log(`  slack:      FAILED\n`);
     }
   }
 
@@ -150,11 +150,11 @@ export async function runPipeline(target: Target): Promise<PipelineResult> {
     console.error("");
   }
   if (exportError) console.error(`\nGOOGLE SHEETS EXPORT FAILED: ${exportError}\n`);
-  if (alertError) console.error(`\nTELEGRAM ALERT FAILED: ${alertError}\n`);
+  if (alertError) console.error(`\nSLACK ALERT FAILED: ${alertError}\n`);
 
   const allFailures = [...problems];
   if (exportError) allFailures.push(`Google Sheets export failed: ${exportError}`);
-  if (alertError) allFailures.push(`Telegram alert failed: ${alertError}`);
+  if (alertError) allFailures.push(`Slack alert failed: ${alertError}`);
   if (allFailures.length === 0) console.log("Health check passed.\n");
 
   return {

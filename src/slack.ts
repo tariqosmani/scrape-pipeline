@@ -1,17 +1,12 @@
 import type { RunRecord } from "./sheets.ts";
 
-const TELEGRAM_API = "https://api.telegram.org";
 const MAX_LINES = 15;
-// Telegram rejects messages over 4096 characters.
+// Slack accepts far more, but past this an alert stops being readable; the sheet holds the full list.
 const MAX_LENGTH = 4096;
 
-export type TelegramConfig = { token: string; chatId: string };
-
-export function telegramConfigFromEnv(): TelegramConfig | null {
-  const token = process.env.SCRAPE_PIPELINE_TELEGRAM_BOT_TOKEN?.trim();
-  const chatId = process.env.SCRAPE_PIPELINE_TELEGRAM_CHAT_ID?.trim();
-  if (!token || !chatId) return null;
-  return { token, chatId };
+/** The incoming-webhook URL, which is itself the secret: whoever holds it can post to the channel. */
+export function slackWebhookFromEnv(): string | null {
+  return process.env.SCRAPE_PIPELINE_SLACK_WEBHOOK_URL?.trim() || null;
 }
 
 /** The alert text, or null when there is nothing worth a message: a quiet healthy run or a baseline. */
@@ -56,13 +51,15 @@ function changeLines(run: RunRecord): string[] {
   return lines;
 }
 
-// Plain text on purpose: with a parse_mode, a scraped value containing * or < could break the message.
-export async function sendMessage({ token, chatId }: TelegramConfig, text: string): Promise<void> {
-  const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+// Scraped text must arrive as plain text. mrkdwn:false stops * _ ~ from formatting, and Slack requires
+// & < > as entities: a raw "<!channel>" or "<https://x|y>" in a scraped title would ping or fake a link.
+export async function sendMessage(webhookUrl: string, text: string): Promise<void> {
+  const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const res = await fetch(webhookUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, link_preview_options: { is_disabled: true } }),
+    body: JSON.stringify({ text: escaped, mrkdwn: false }),
   });
-  const json = (await res.json()) as { ok: boolean; description?: string };
-  if (!json.ok) throw new Error(`Telegram sendMessage → ${res.status}: ${json.description ?? "unknown error"}`);
+  // The error names only the status and Slack's reason (e.g. "no_service"), never the URL, which is secret.
+  if (!res.ok) throw new Error(`Slack webhook → ${res.status}: ${(await res.text()) || "unknown error"}`);
 }

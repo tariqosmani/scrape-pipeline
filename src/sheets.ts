@@ -33,17 +33,19 @@ export function sheetsConfigFromEnv(): SheetsConfig | null {
   return { email, privateKey, sheetId };
 }
 
-// A pasted PEM survives four different ways depending on the host: one line with literal \n escapes
-// (this project's own .env format), real multi-line text, CRLF line endings from a Windows clipboard,
-// or wrapped in the quotes .env needs but an env-var UI's bulk paste imports literally. Handle all four
-// rather than trust one paste to come out clean.
-function normalizePrivateKey(raw: string | undefined): string | undefined {
+// A pasted PEM's line breaks survive a paste in whatever shape the host mangles them into — literal
+// \n escapes, CRLF, quotes wrapped around the block, or (seen on Trigger.dev's dashboard bulk import)
+// collapsed away entirely, which OpenSSL's PEM decoder rejects with a bare "DECODER routines::unsupported"
+// since it can no longer find BEGIN/END on their own line. Rather than pattern-match every mangled shape,
+// pull the base64 body out from between the markers and rebuild a standard PEM, so any whitespace damage
+// around or inside the body is irrelevant.
+export function normalizePrivateKey(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
-  let key = raw.trim();
-  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
-    key = key.slice(1, -1).trim();
-  }
-  return key.replace(/\\n/g, "\n").replace(/\r\n/g, "\n").trim();
+  const match = raw.match(/-----BEGIN PRIVATE KEY-----([\s\S]*?)-----END PRIVATE KEY-----/);
+  if (!match) return undefined;
+  const body = (match[1] ?? "").replace(/\\n/g, "").replace(/\s+/g, "");
+  const lines = body.match(/.{1,64}/g) ?? [];
+  return `-----BEGIN PRIVATE KEY-----\n${lines.join("\n")}\n-----END PRIVATE KEY-----\n`;
 }
 
 /** Healthy run: replace Items, append Changes and Runs. Unhealthy run: append Runs only, so bad data never reaches the sheet. */

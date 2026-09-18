@@ -42,6 +42,7 @@ no ignore rule and would be committed.
 npm start                          # run the books.toscrape.com demo target
 npm run run -- targets/<name>.json # run any other target
 npm run typecheck                  # tsc --noEmit (types only; nothing is emitted)
+npm test                           # node --test, currently just sheets.test.ts (normalizePrivateKey)
 npm run dev:trigger                # Trigger.dev dev server: runs tasks locally against the dev environment
 ```
 
@@ -150,10 +151,14 @@ The GitHub repo is connected in the dashboard: **every push to `main` deploys to
   (Production environment → Environment Variables); without them a run skips Sheets and Slack.
 - **The private key's line breaks do not always survive that dashboard.** A first Production test
   failed with `error:1E08010C:DECODER routines::unsupported` from `Sign.sign` — the multi-line PEM was
-  mangled by the dashboard's "paste all your .env values at once" bulk import. `normalizePrivateKey()`
-  in `sheets.ts` now accepts the key as real multi-line text, one line with `\n` escapes, CRLF line
-  endings, and wrapped in quotes, in any combination. Checked by re-signing and verifying against the
-  real public key for each shape, not just that parsing doesn't throw.
+  mangled by the dashboard's "paste all your .env values at once" bulk import. A later Production run
+  hit the same error again with the line breaks collapsed away entirely (no `\n` left in any form),
+  a shape the first fix didn't cover since it only replaced known escape patterns. `normalizePrivateKey()`
+  in `sheets.ts` no longer pattern-matches paste shapes: it pulls the base64 body out from between the
+  `BEGIN`/`END` markers and rebuilds a standard PEM, so any whitespace damage — quotes, CRLF, `\n`
+  escapes, or line breaks gone entirely — is irrelevant. Checked in `sheets.test.ts` (`npm test`) by
+  re-signing and verifying against a real key pair for each mangled shape, not just that parsing doesn't
+  throw.
 - The bundler warns `Unrecognized target environment "es2024"` from `tsconfig.json`. Harmless.
 - `npm audit` flags packages inside Trigger.dev itself; the only offered "fix" downgrades to v1/v2.
   Do not run `npm audit fix --force`.

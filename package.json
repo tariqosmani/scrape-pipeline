@@ -11,6 +11,7 @@
     "start": "node src/index.ts targets/books.json",
     "run": "node src/index.ts",
     "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\"",
     "dev:trigger": "trigger dev"
   },
   "license": "MIT",

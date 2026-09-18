@@ -27,11 +27,23 @@ type Cell = string | number;
 
 export function sheetsConfigFromEnv(): SheetsConfig | null {
   const email = process.env.SCRAPE_PIPELINE_SERVICE_ACCOUNT_EMAIL?.trim();
-  // .env stores the PEM on one line with literal \n escapes; restore real newlines.
-  const privateKey = process.env.SCRAPE_PIPELINE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, "\n").trim();
+  const privateKey = normalizePrivateKey(process.env.SCRAPE_PIPELINE_SERVICE_ACCOUNT_PRIVATE_KEY);
   const sheetId = process.env.SCRAPE_PIPELINE_SHEET_ID?.trim();
   if (!email || !privateKey || !sheetId) return null;
   return { email, privateKey, sheetId };
+}
+
+// A pasted PEM survives four different ways depending on the host: one line with literal \n escapes
+// (this project's own .env format), real multi-line text, CRLF line endings from a Windows clipboard,
+// or wrapped in the quotes .env needs but an env-var UI's bulk paste imports literally. Handle all four
+// rather than trust one paste to come out clean.
+function normalizePrivateKey(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  let key = raw.trim();
+  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+    key = key.slice(1, -1).trim();
+  }
+  return key.replace(/\\n/g, "\n").replace(/\r\n/g, "\n").trim();
 }
 
 /** Healthy run: replace Items, append Changes and Runs. Unhealthy run: append Runs only, so bad data never reaches the sheet. */

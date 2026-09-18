@@ -148,6 +148,12 @@ The GitHub repo is connected in the dashboard: **every push to `main` deploys to
   (no `^`). Without a TTY the CLI treats the run as CI and aborts on any version mismatch.
 - `.env` is not deployed. Production needs the `SCRAPE_PIPELINE_*` vars set in the dashboard
   (Production environment → Environment Variables); without them a run skips Sheets and Slack.
+- **The private key's line breaks do not always survive that dashboard.** A first Production test
+  failed with `error:1E08010C:DECODER routines::unsupported` from `Sign.sign` — the multi-line PEM was
+  mangled by the dashboard's "paste all your .env values at once" bulk import. `normalizePrivateKey()`
+  in `sheets.ts` now accepts the key as real multi-line text, one line with `\n` escapes, CRLF line
+  endings, and wrapped in quotes, in any combination. Checked by re-signing and verifying against the
+  real public key for each shape, not just that parsing doesn't throw.
 - The bundler warns `Unrecognized target environment "es2024"` from `tsconfig.json`. Harmless.
 - `npm audit` flags packages inside Trigger.dev itself; the only offered "fix" downgrades to v1/v2.
   Do not run `npm audit fix --force`.

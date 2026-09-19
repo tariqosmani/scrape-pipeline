@@ -1,0 +1,16 @@
+{
+  "name": "ecb-rates",
+  "sheetTab": "ECB Rates",
+  "format": "xml",
+  "startUrl": "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml",
+  "maxPages": 1,
+  "requestDelayMs": 1000,
+  "userAgent": "scrape-pipeline/0.1 (portfolio demo; +https://smartaiworkspace.tech)",
+  "itemSelector": "Cube[currency]",
+  "fields": {
+    "currency": { "attr": "currency" },
+    "rate": { "attr": "rate" }
+  },
+  "key": "currency",
+  "minItemsExpected": 25
+}

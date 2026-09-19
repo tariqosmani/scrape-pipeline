@@ -9,14 +9,14 @@ export type PageResult = {
 };
 
 export function extractPage(html: string, pageUrl: string, target: Target): PageResult {
-  const $ = cheerio.load(html);
+  const $ = cheerio.load(html, { xml: target.format === "xml" });
 
   const items = $(target.itemSelector)
     .toArray()
     .map((element) => {
       const item: Item = {};
       for (const [name, field] of Object.entries(target.fields)) {
-        const node = $(element).find(field.selector).first();
+        const node = field.selector === undefined ? $(element) : $(element).find(field.selector).first();
         const value = field.attr ? node.attr(field.attr) : node.text();
         item[name] = value?.trim() ?? "";
       }

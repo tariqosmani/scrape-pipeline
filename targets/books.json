@@ -1,5 +1,6 @@
 {
   "name": "books-demo",
+  "sheetTab": "Books",
   "startUrl": "https://books.toscrape.com/catalogue/page-1.html",
   "maxPages": 3,
   "requestDelayMs": 1000,

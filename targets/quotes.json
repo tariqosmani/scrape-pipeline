@@ -1,0 +1,17 @@
+{
+  "name": "quotes-demo",
+  "sheetTab": "Quotes",
+  "startUrl": "https://quotes.toscrape.com/page/1/",
+  "maxPages": 10,
+  "requestDelayMs": 1000,
+  "userAgent": "scrape-pipeline/0.1 (portfolio demo; +https://smartaiworkspace.tech)",
+  "itemSelector": "div.quote",
+  "fields": {
+    "quote": { "selector": "span.text" },
+    "author": { "selector": "small.author" },
+    "tags": { "selector": "meta.keywords", "attr": "content" }
+  },
+  "key": "quote",
+  "nextPageSelector": "li.next a",
+  "minItemsExpected": 80
+}

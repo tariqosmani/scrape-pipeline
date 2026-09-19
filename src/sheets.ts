@@ -1,15 +1,27 @@
 import { createSign } from "node:crypto";
+import type { Target } from "./config.ts";
 import type { Item } from "./extract.ts";
 import type { Diff, Snapshot } from "./store.ts";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
-// Hidden tab holding the last good run. A1 is the run metadata as JSON, A2 down one item per row as JSON.
-const SNAPSHOT_TAB = "Snapshot";
 // Must match the spreadsheet's timezone (Asia/Karachi, UTC+5, no DST) or run times shift.
 const SHEET_UTC_OFFSET_HOURS = 5;
+// The existing tabs' header style: bold white on dark slate (#212B3A).
+const HEADER_FORMAT = {
+  backgroundColor: { red: 0.1294, green: 0.1686, blue: 0.2275 },
+  textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
+};
 
 export type SheetsConfig = { email: string; privateKey: string; sheetId: string };
+
+/** Each target has its own Items tab and its own hidden Snapshot tab; Changes and Runs are shared. */
+export type SheetTabs = { items: string; snapshot: string };
+
+export function sheetTabs(target: Target): SheetTabs {
+  // The snapshot tab holds the last good run: A1 is its metadata as JSON, A2 down one item per row as JSON.
+  return { items: target.sheetTab ?? target.name, snapshot: `Snapshot: ${target.name}` };
+}
 
 export type RunRecord = {
   target: string;
@@ -48,18 +60,63 @@ export function normalizePrivateKey(raw: string | undefined): string | undefined
   return `-----BEGIN PRIVATE KEY-----\n${lines.join("\n")}\n-----END PRIVATE KEY-----\n`;
 }
 
-/** Healthy run: replace Items, append Changes and Runs. Unhealthy run: append Runs only, so bad data never reaches the sheet. */
-export async function pushRun(config: SheetsConfig, run: RunRecord): Promise<void> {
+/** Creates a target's Items tab (header, filter, date column) and hidden Snapshot tab on its first run, so adding a site needs no manual sheet setup. */
+export async function ensureTabs(config: SheetsConfig, target: Target): Promise<void> {
+  const call = await client(config);
+  const tabs = sheetTabs(target);
+  type Props = { sheetId: number; title: string; index: number };
+  const meta = (await call("GET", "?fields=sheets.properties(sheetId,title,index)")) as { sheets: { properties: Props }[] };
+  const existing = new Map(meta.sheets.map(({ properties }) => [properties.title, properties]));
+
+  const requests: unknown[] = [];
+  if (!existing.has(tabs.snapshot)) requests.push({ addSheet: { properties: { title: tabs.snapshot, hidden: true } } });
+  if (!existing.has(tabs.items)) {
+    // Before Changes, so the per-site tabs sit together at the front.
+    const index = existing.get("Changes")?.index;
+    requests.push({ addSheet: { properties: { title: tabs.items, index, gridProperties: { frozenRowCount: 1 } } } });
+  }
+  if (requests.length === 0) return;
+
+  const res = (await call("POST", ":batchUpdate", { requests })) as { replies: { addSheet?: { properties: Props } }[] };
+  const created = res.replies.map((reply) => reply.addSheet?.properties).find((props) => props?.title === tabs.items);
+  if (!created) return;
+
+  const header = [...Object.keys(target.fields).map((f) => f[0]!.toUpperCase() + f.slice(1)), "Target", "Scraped At"];
+  const sheetId = created.sheetId;
+  const columns = { sheetId, startColumnIndex: 0, endColumnIndex: header.length };
+  await call("POST", ":batchUpdate", {
+    requests: [
+      {
+        updateCells: {
+          start: { sheetId, rowIndex: 0, columnIndex: 0 },
+          rows: [{ values: header.map((h) => ({ userEnteredValue: { stringValue: h }, userEnteredFormat: HEADER_FORMAT })) }],
+          fields: "userEnteredValue,userEnteredFormat(backgroundColor,textFormat)",
+        },
+      },
+      {
+        repeatCell: {
+          range: { sheetId, startRowIndex: 1, startColumnIndex: header.length - 1, endColumnIndex: header.length },
+          cell: { userEnteredFormat: { numberFormat: { type: "DATE_TIME", pattern: "yyyy-mm-dd hh:mm" } } },
+          fields: "userEnteredFormat.numberFormat",
+        },
+      },
+      { setBasicFilter: { filter: { range: { ...columns, startRowIndex: 0 } } } },
+    ],
+  });
+}
+
+/** Healthy run: replace the target's Items tab, append Changes and Runs. Unhealthy run: append Runs only, so bad data never reaches the sheet. */
+export async function pushRun(config: SheetsConfig, itemsTab: string, run: RunRecord): Promise<void> {
   const call = await client(config);
   const at = dateSerial(run.runAt);
   const healthy = run.problems.length === 0;
 
   if (healthy) {
-    await call("POST", "/values:batchClear", { ranges: ["Items!A2:Z"] });
+    await call("POST", "/values:batchClear", { ranges: [a1(itemsTab, "A2:Z")] });
     if (run.items.length > 0) {
       await call("POST", "/values:batchUpdate", {
         valueInputOption: "RAW",
-        data: [{ range: "Items!A2", values: run.items.map((item) => itemRow(item, run, at)) }],
+        data: [{ range: a1(itemsTab, "A2"), values: run.items.map((item) => itemRow(item, run, at)) }],
       });
     }
     const changes = run.isBaseline ? [] : changeRows(run, at);
@@ -69,35 +126,32 @@ export async function pushRun(config: SheetsConfig, run: RunRecord): Promise<voi
   await append(call, "Runs!A1", [runRow(run, at, healthy)]);
 }
 
-/** The last good run from the Snapshot tab, or null when the tab is empty (the next run is a baseline). */
-export async function loadSnapshot(config: SheetsConfig, target: string): Promise<Snapshot | null> {
+/** The last good run from the target's Snapshot tab, or null when the tab is empty (the next run is a baseline). */
+export async function loadSnapshot(config: SheetsConfig, tab: string, target: string): Promise<Snapshot | null> {
   const call = await client(config);
-  const res = (await call("GET", `/values/${encodeURIComponent(`${SNAPSHOT_TAB}!A:A`)}`)) as { values?: string[][] };
+  const res = (await call("GET", `/values/${encodeURIComponent(a1(tab, "A:A"))}`)) as { values?: string[][] };
   const [metaRow, ...itemRows] = res.values ?? [];
   if (!metaRow?.[0]) return null;
 
   const meta = JSON.parse(metaRow[0]) as Omit<Snapshot, "items">;
   if (meta.target !== target) {
-    throw new Error(
-      `The ${SNAPSHOT_TAB} tab holds "${meta.target}", not "${target}". One sheet serves one target; ` +
-        `clear the ${SNAPSHOT_TAB} tab only if this sheet is meant to switch targets.`,
-    );
+    throw new Error(`The "${tab}" tab holds a snapshot of "${meta.target}", not "${target}".`);
   }
   // itemCount, not the row count, bounds the read: rows left over from a longer earlier run are ignored.
   const items = itemRows.slice(0, meta.itemCount).map((row) => JSON.parse(row[0] ?? "") as Item);
   return { ...meta, items };
 }
 
-export async function saveSnapshot(config: SheetsConfig, snapshot: Snapshot): Promise<void> {
+export async function saveSnapshot(config: SheetsConfig, tab: string, snapshot: Snapshot): Promise<void> {
   const call = await client(config);
   const { items, ...meta } = snapshot;
   // Metadata and items land in one request, so a failure never leaves a half-written snapshot.
   await call("POST", "/values:batchUpdate", {
     valueInputOption: "RAW",
-    data: [{ range: `${SNAPSHOT_TAB}!A1`, values: [[JSON.stringify(meta)], ...items.map((item) => [JSON.stringify(item)])] }],
+    data: [{ range: a1(tab, "A1"), values: [[JSON.stringify(meta)], ...items.map((item) => [JSON.stringify(item)])] }],
   });
   // Tidy only: loadSnapshot already ignores anything past itemCount.
-  await call("POST", "/values:batchClear", { ranges: [`${SNAPSHOT_TAB}!A${items.length + 2}:A`] });
+  await call("POST", "/values:batchClear", { ranges: [a1(tab, `A${items.length + 2}:A`)] });
 }
 
 export function itemRow(item: Item, run: RunRecord, at: number): Cell[] {
@@ -129,9 +183,16 @@ function runRow(run: RunRecord, at: number, healthy: boolean): Cell[] {
   return [at, run.target, run.items.length, ...counts, fill, healthy ? "Passed" : "Failed", notes];
 }
 
-// A price-like string becomes a number so the sheet can sort and format it; everything else stays text.
+// A price-like or decimal string becomes a number so the sheet can sort and format it; everything else
+// stays text. Whole numbers stay text on purpose: a book titled "1984" is not a quantity.
 function toCell(value: string): Cell {
-  return /^[£$€]\s?\d[\d,]*(\.\d+)?$/.test(value) ? Number(value.replace(/[^\d.]/g, "")) : value;
+  if (/^[£$€]\s?\d[\d,]*(\.\d+)?$/.test(value)) return Number(value.replace(/[^\d.]/g, ""));
+  return /^-?\d+\.\d+$/.test(value) ? Number(value) : value;
+}
+
+// A1 range on a named tab. Quoted, because tab names such as "ECB Rates" or "Snapshot: x" contain spaces.
+function a1(tab: string, cells: string): string {
+  return `'${tab.replace(/'/g, "''")}'!${cells}`;
 }
 
 function dateSerial(iso: string): number {

@@ -1,7 +1,7 @@
 import type { Target } from "./config.ts";
 import { crawlDelayMs, isAllowed, politeFetch, sleep } from "./fetch.ts";
 import { extractPage, fillRates, type Item } from "./extract.ts";
-import { loadSnapshot, pushRun, saveSnapshot, sheetsConfigFromEnv, type RunRecord } from "./sheets.ts";
+import { ensureTabs, loadSnapshot, pushRun, saveSnapshot, sheetsConfigFromEnv, sheetTabs, type RunRecord } from "./sheets.ts";
 import { diff, loadPrevious, save, type Snapshot } from "./store.ts";
 import { digest, sendMessage, slackWebhookFromEnv } from "./slack.ts";
 
@@ -21,10 +21,12 @@ export type PipelineResult = {
 export async function runPipeline(target: Target): Promise<PipelineResult> {
   const fieldNames = Object.keys(target.fields);
   const sheets = sheetsConfigFromEnv();
+  const tabs = sheetTabs(target);
+  if (sheets) await ensureTabs(sheets, target);
   // With Google credentials the snapshot lives in the sheet, because Trigger.dev runs keep no files.
   // Loaded before crawling, and a failed load throws: treating it as a first run would silently
   // swallow every change since the last snapshot.
-  const previous = sheets ? await loadSnapshot(sheets, target.name) : await loadPrevious(target.name);
+  const previous = sheets ? await loadSnapshot(sheets, tabs.snapshot, target.name) : await loadPrevious(target.name);
   const delayMs = await crawlDelayMs(target.startUrl, target.userAgent, target.requestDelayMs);
 
   console.log(`\n${target.name} — starting at ${target.startUrl}`);
@@ -107,12 +109,12 @@ export async function runPipeline(target: Target): Promise<PipelineResult> {
   let exportError: string | null = null;
   if (sheets) {
     try {
-      await pushRun(sheets, run);
-      console.log(`  sheet:      updated (${healthy ? "Items, Changes, Runs" : "Runs only, run was unhealthy"})`);
+      await pushRun(sheets, tabs.items, run);
+      console.log(`  sheet:      updated (${healthy ? `${tabs.items}, Changes, Runs` : "Runs only, run was unhealthy"})`);
       // Saved only after the export succeeds: if it failed, the next run reports these changes again
       // (a duplicate Changes row) instead of never reporting them.
-      if (healthy) await saveSnapshot(sheets, snapshot);
-      console.log(`  snapshot:   ${healthy ? "saved to the sheet's Snapshot tab" : keptNote}`);
+      if (healthy) await saveSnapshot(sheets, tabs.snapshot, snapshot);
+      console.log(`  snapshot:   ${healthy ? `saved to the sheet's "${tabs.snapshot}" tab` : keptNote}`);
     } catch (error) {
       exportError = error instanceof Error ? error.message : String(error);
       console.log(`  sheet:      FAILED (snapshot not advanced)`);

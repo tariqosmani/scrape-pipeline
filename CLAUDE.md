@@ -41,9 +41,11 @@ the file still belongs in `~/.config`.
 
 ```bash
 npm start                          # run the books.toscrape.com demo target
-npm run run -- targets/<name>.json # run any other target
+npm run all                        # every registered target at once, one process each, output per target
+npm run run -- --target <name>     # one registered target by name (books-demo, quotes-demo, ecb-rates)
+npm run run -- targets/<name>.json # any target file, registered or not
 npm run typecheck                  # tsc --noEmit (types only; nothing is emitted)
-npm test                           # node --test, currently just sheets.test.ts (normalizePrivateKey)
+npm test                           # node --test: normalizePrivateKey, XML/HTML extraction, sheet cell types
 npm run dev:trigger                # Trigger.dev dev server: runs tasks locally against the dev environment
 ```
 
@@ -61,23 +63,32 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
 - **`src/config.ts`** — Zod schema for a target file. Rejects a bad config before any network call.
 - **`src/fetch.ts`** — the politeness layer: robots.txt (cached per origin, honors `Crawl-delay`),
   per-request delay, retry with backoff on 429/5xx, descriptive User-Agent.
-- **`src/extract.ts`** — Cheerio extraction driven by the config's selectors, plus `fillRates()`.
+- **`src/extract.ts`** — Cheerio extraction driven by the config's selectors (HTML, or XML when the
+  target sets `"format": "xml"`), plus `fillRates()`.
+- **`src/targets.ts`** — the registry of targets the Trigger.dev tasks and `npm run all` run. It imports
+  each `targets/*.json` into the bundle, since a deployed run has no `targets/` folder. **A new site is a
+  JSON file plus one line here**; its sheet tabs appear on its first run.
 - **`src/store.ts`** — the keyed diff, plus the local snapshot file `data/<target>.json`, used only
   when the Google vars are unset (with them, the snapshot lives in the sheet). A snapshot
   is `{ target, runAt, itemCount, fillRates, items }`; `diff()` maps both item lists by `key` and
   compares by `JSON.stringify` equality, so field order inside an item never causes a false change.
 - **`src/pipeline.ts`** — `runPipeline(target)`: one full run (crawl, health checks, snapshot, Sheets,
   Slack). Returns `{ ok, failures, ... }` and never exits the process, so both entry points share it.
-- **`src/index.ts`** — CLI entry point: loads `.env`, reads the target file, exits `1` when the run fails.
-- **`src/trigger/scrape.ts`** — Trigger.dev task `scrape-books-demo`. Imports `targets/books.json` into
-  the bundle (no file read at runtime) and throws on failure so the run shows Failed. It also throws
-  before crawling when any of the four `SCRAPE_PIPELINE_*` vars is missing: unlike the CLI, a cloud run
-  has no disk to fall back to, so it would otherwise pass green while writing nothing. `retry.maxAttempts`
-  is `1` on purpose: a retry would append a second Runs row and send the Slack alert twice.
+- **`src/index.ts`** — CLI entry point: loads `.env`, runs a target file, a registered `--target <name>`,
+  or `--all`, and exits `1` when a run fails. `--all` starts one child process per registered target at
+  once and prints each one's output when it finishes, so parallel logs never interleave.
+- **`src/trigger/scrape.ts`** — two Trigger.dev tasks. `scrape-target` runs one registered site (payload
+  `{ "target": "<name>" }`) and throws on failure so the run shows Failed. `scrape-all` fans out one
+  `scrape-target` child run per site with `batchTriggerAndWait`, so the sites run in parallel with their
+  own logs and status, and fails if any child failed. Both throw before crawling when any of the four
+  `SCRAPE_PIPELINE_*` vars is missing: unlike the CLI, a cloud run has no disk to fall back to, so it
+  would otherwise pass green while writing nothing. `retry.maxAttempts` is `1` on purpose: a retry would
+  append a second Runs row and send the Slack alert twice.
 - **`src/sheets.ts`** — Google Sheets export through a service account. It signs its own JWT with
   `node:crypto` and calls the Sheets REST API with `fetch`, so there is no Google client library.
-  Skipped with a log line when the `SCRAPE_PIPELINE_*` vars are not set. Also `loadSnapshot()` /
-  `saveSnapshot()` for the hidden Snapshot tab (see Google Sheet).
+  Skipped with a log line when the `SCRAPE_PIPELINE_*` vars are not set. `ensureTabs()` creates a new
+  target's tabs, `pushRun()` writes a run, `loadSnapshot()` / `saveSnapshot()` handle the target's hidden
+  Snapshot tab (see Google Sheet).
 - **`src/slack.ts`** — the "what changed" alert, posted to a Slack incoming webhook. `digest()` returns
   the message text, or `null` for a quiet healthy run or a baseline, so the channel only hears about it
   when something changed, the health check failed, or the Sheets export failed. Sent with
@@ -88,12 +99,14 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
 
 ## Target config format
 
-One JSON file per site in `targets/`. `key` must name one of the `fields` and must be stable —
-the diff is keyed on it.
+One JSON file per site in `targets/`, registered in `src/targets.ts`. `key` must name one of the
+`fields` and must be stable — the diff is keyed on it. `name` is lowercase letters, digits and hyphens
+(it becomes a file name and a tab name). Current targets: `books.json`, `quotes.json`, `ecb-rates.json`.
 
 ```json
 {
   "name": "books-demo",
+  "sheetTab": "Books",
   "startUrl": "https://books.toscrape.com/catalogue/page-1.html",
   "maxPages": 3,
   "requestDelayMs": 1000,
@@ -109,7 +122,9 @@ the diff is keyed on it.
 }
 ```
 
-Omit `attr` to take the element's text.
+Omit `attr` to take the element's text. Omit `selector` to read from the item element itself, and set
+`"format": "xml"` for an XML feed. `ecb-rates.json` uses both: `"itemSelector": "Cube[currency]"` with
+fields `{ "attr": "currency" }` and `{ "attr": "rate" }`. `sheetTab` defaults to `name`.
 
 ## Health checks (the differentiating feature)
 
@@ -172,6 +187,8 @@ The GitHub repo is connected in the dashboard: **every push to `main` deploys to
   `import.meta.dirname`-relative path lands in a throwaway build folder), and cloud runs keep no files
   at all. That is why the snapshot lives in the sheet's Snapshot tab. Never reintroduce run state on
   local disk.
+- **To test in the dashboard:** run `scrape-all` with payload `{}` (every site, in parallel), or
+  `scrape-target` with `{ "target": "ecb-rates" }` for one site. `scrape-books-demo` no longer exists.
 
 ## Known workaround
 
@@ -199,10 +216,14 @@ deleted in the `invoice-472509` console.
 
 | Tab | Columns | Behavior |
 |---|---|---|
-| **Items** | Title · Price · Availability · Target · Scraped At | Current dataset, one row per item. Price is a number shown as £; Scraped At is a date serial. Filter on the header. |
-| **Changes** | Detected At · Target · Change · Item · Field · Before · After | Append-only change log. Color rules match the exact words `New` / `Removed` / `Updated`. |
-| **Runs** | Run At · Target · Items · New · Removed · Updated · Fill Rates · Health · Notes | One row per run. Color rules match `Passed` / `Failed`. |
-| **Snapshot** *(hidden)* | Column A only: A1 = `{ target, runAt, itemCount, fillRates }` as JSON, A2 down = one item per row as JSON | The last good run the next run diffs against. Written in one `values:batchUpdate`; reads stop at `itemCount`, so leftover rows never count. One sheet serves one target: a different target name in A1 fails the run. Created and seeded 2026-09-17 from the 21:18 run, after checking it matched Items and the latest Runs row. |
+| **Books** · **ECB Rates** · **Quotes** | The target's fields (title-cased) · Target · Scraped At | One tab per target (`sheetTab`), its current dataset, one row per item, replaced each healthy run. Prices (£) and decimals are numbers; Scraped At is a date serial. Filter on the header. Books was the original `Items` tab, renamed 2026-09-19. |
+| **Changes** | Detected At · Target · Change · Item · Field · Before · After | Shared, append-only change log. Color rules match the exact words `New` / `Removed` / `Updated`. |
+| **Runs** | Run At · Target · Items · New · Removed · Updated · Fill Rates · Health · Notes | Shared, one row per run per target. Color rules match `Passed` / `Failed`. |
+| **Snapshot: `<name>`** *(hidden, one per target)* | Column A only: A1 = `{ target, runAt, itemCount, fillRates }` as JSON, A2 down = one item per row as JSON | The target's last good run, which its next run diffs against. Written in one `values:batchUpdate`; reads stop at `itemCount`, so leftover rows never count. A different target name in A1 fails the run. `Snapshot: books-demo` was the original `Snapshot` tab, renamed 2026-09-19. |
+
+**A new target's tabs are created on its first run** (`ensureTabs()` in `sheets.ts`): the Items tab with
+the existing header style, a filter and the date format, placed before Changes, plus its hidden Snapshot
+tab. Nothing needs setting up by hand.
 
 Seeded with the 2026-09-17 19:40 baseline snapshot (60 books, health Passed). **Changes is empty on
 purpose:** no real change has happened yet, and the faked diff used to test change detection was
@@ -242,6 +263,16 @@ in `scrape-pipeline-509110`), `run_06gbiil3tmst8bohc8t7msaje1` at 15:51 read the
 (0 changes, not a first run), refreshed Items, wrote a Passed Runs row, and advanced the Snapshot tab.
 Checked by reading all three tabs back through `gws`.
 
-Not built yet, in rough priority order: a schedule on
-the task, a second target on a real live site (SEC
-EDGAR), and the Upwork portfolio card.
+**Three targets at once, verified locally (2026-09-19).** `npm run all` ran books-demo (60), quotes-demo
+(100 across 10 pages) and ecb-rates (29 currencies) in parallel in 22s, all Passed. It created the ECB
+Rates and Quotes tabs and their snapshot tabs, and a second run diffed each against its own snapshot
+(0 changes). Books kept its history through the tab rename. **ecb-rates is the first target that really
+changes**: the ECB publishes new rates each business day around 16:00 CET, so from the next business day
+it writes real Updated rows to Changes and sends a real Slack alert.
+
+**SEC EDGAR is not a target:** its robots.txt disallows `/cgi-bin/browse-edgar`, so the pipeline would
+refuse it. It needs the official `data.sec.gov` JSON API, which needs a JSON source type (not built) and a
+User-Agent with a contact email.
+
+Not built yet, in rough priority order: a schedule on `scrape-all`, a JSON source type (for SEC EDGAR and
+other APIs), and the Upwork portfolio card.

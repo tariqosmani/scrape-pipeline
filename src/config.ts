@@ -2,13 +2,19 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
 const fieldSchema = z.object({
-  selector: z.string(),
+  // Omitted: the value comes from the item element itself, e.g. an attribute on it.
+  selector: z.string().optional(),
   attr: z.string().optional(),
 });
 
 export const targetSchema = z.object({
-  name: z.string(),
+  // Lands in a file name and a sheet tab name, so it stays plain.
+  name: z.string().regex(/^[a-z0-9-]+$/, "use lowercase letters, digits and hyphens"),
+  // The sheet tab listing this target's current items. Defaults to the name.
+  sheetTab: z.string().optional(),
   startUrl: z.url(),
+  // "xml" for feeds such as the ECB's daily rates: tag names are case-sensitive there.
+  format: z.enum(["html", "xml"]).default("html"),
   maxPages: z.number().int().positive().default(1),
   requestDelayMs: z.number().int().min(0).default(1000),
   userAgent: z.string(),

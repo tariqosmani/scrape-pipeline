@@ -33,8 +33,9 @@ tested from this PC. Slack's `hooks.slack.com` is reachable here. The old `SCRAP
 lines may still sit in `.env`; nothing reads them.
 
 The original JSON key file is kept **outside the repo** at `~/.config/scrape-pipeline/service-account.json`.
-Never place a key file inside the project: Google's default name (`invoice-472509-<id>.json`) matches
-no ignore rule and would be committed.
+Never place a key file inside the project. Google's default name (`<project-id>-<12 hex>.json`) is now
+covered by a `.gitignore` rule (added 2026-09-19, after a key was saved into the project folder), but
+the file still belongs in `~/.config`.
 
 ## Commands
 
@@ -69,7 +70,9 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
   Slack). Returns `{ ok, failures, ... }` and never exits the process, so both entry points share it.
 - **`src/index.ts`** — CLI entry point: loads `.env`, reads the target file, exits `1` when the run fails.
 - **`src/trigger/scrape.ts`** — Trigger.dev task `scrape-books-demo`. Imports `targets/books.json` into
-  the bundle (no file read at runtime) and throws on failure so the run shows Failed. `retry.maxAttempts`
+  the bundle (no file read at runtime) and throws on failure so the run shows Failed. It also throws
+  before crawling when any of the four `SCRAPE_PIPELINE_*` vars is missing: unlike the CLI, a cloud run
+  has no disk to fall back to, so it would otherwise pass green while writing nothing. `retry.maxAttempts`
   is `1` on purpose: a retry would append a second Runs row and send the Slack alert twice.
 - **`src/sheets.ts`** — Google Sheets export through a service account. It signs its own JWT with
   `node:crypto` and calls the Sheets REST API with `fetch`, so there is no Google client library.
@@ -147,8 +150,11 @@ The GitHub repo is connected in the dashboard: **every push to `main` deploys to
 
 - `@trigger.dev/sdk`, `@trigger.dev/build` and `trigger.dev` are pinned to the **exact same version**
   (no `^`). Without a TTY the CLI treats the run as CI and aborts on any version mismatch.
-- `.env` is not deployed. Production needs the `SCRAPE_PIPELINE_*` vars set in the dashboard
-  (Production environment → Environment Variables); without them a run skips Sheets and Slack.
+- `.env` is not deployed. Production needs the four `SCRAPE_PIPELINE_*` vars set separately; without
+  them the task fails before crawling. Check with `npx trigger.dev env list --env prod` (names only).
+  Prefer `npx trigger.dev env set --env prod --secret -- <NAME> <value>` over the dashboard's bulk paste.
+  The `--` is required for the private key: a value starting with `-----BEGIN` is otherwise parsed as an
+  unknown option, and the CLI's error message echoes the whole value back.
 - **The private key's line breaks do not always survive that dashboard.** A first Production test
   failed with `error:1E08010C:DECODER routines::unsupported` from `Sign.sign` — the multi-line PEM was
   mangled by the dashboard's "paste all your .env values at once" bulk import. A later Production run
@@ -180,11 +186,16 @@ casts. Remove that cast if upstream fixes the typings.
 Created 2026-09-17 with the `gws` CLI, timezone Asia/Karachi. **The Sheets export must write to
 this sheet and these columns — do not create a new sheet.**
 
-Written by the service account `scrape-pipeline@invoice-472509.iam.gserviceaccount.com`. It lives in
-GCP project **`invoice-472509`**, not `tariq-aios`, and the Google Sheets API is enabled there. It is
-shared on the sheet as **Editor**; without that share every write fails with
+Written by the service account `scrape-pipeline@scrape-pipeline-509110.iam.gserviceaccount.com`. It lives
+in its own GCP project **`scrape-pipeline-509110`** (created 2026-09-19), with only the Google Sheets API
+enabled and no project roles. It is shared on the sheet as **Editor**; without that share every write fails with
 `403: The caller does not have permission`. The date serials in `sheets.ts` assume the sheet's
 UTC+5 timezone — change `SHEET_UTC_OFFSET_HOURS` if the sheet's timezone ever changes.
+
+**Moved from `invoice-472509` on 2026-09-19.** The old account `scrape-pipeline@invoice-472509` had its
+key partly printed to a terminal and chat by a setup script, so the pipeline got its own project and a
+new account. The old account's share on the sheet was removed the same day; the account itself is to be
+deleted in the `invoice-472509` console.
 
 | Tab | Columns | Behavior |
 |---|---|---|
@@ -221,9 +232,16 @@ succeeded in 12s: 60 items, 0 changes, a Passed row on Runs at 15:35, and the Sn
 `trigger dev` loads the project `.env` into local runs on its own. A Development run only executes while
 `npm run dev:trigger` is running on this PC; otherwise it waits as Queued.
 
-Production deploys succeed on every push (latest `f3f62b9`), but Production has not run yet: its env
-vars are not set in the dashboard.
+**First Production run, 2026-09-19 (`run_06gbib2a9sbf4inpn7ehln2te1`): Completed, but wrote nothing.**
+`env list --env prod` showed none of the `SCRAPE_PIPELINE_*` vars, so it logged "sheet: skipped" and
+"slack: skipped", saved its snapshot to `/app/src/data/` (discarded), and still returned `ok: true`. The
+task now fails in that case.
 
-Not built yet, in rough priority order: Production env vars and a first Production run, a schedule on
+**Production run verified (2026-09-19).** After the four vars were set with `env set` (new service account
+in `scrape-pipeline-509110`), `run_06gbiil3tmst8bohc8t7msaje1` at 15:51 read the snapshot from the sheet
+(0 changes, not a first run), refreshed Items, wrote a Passed Runs row, and advanced the Snapshot tab.
+Checked by reading all three tabs back through `gws`.
+
+Not built yet, in rough priority order: a schedule on
 the task, a second target on a real live site (SEC
 EDGAR), and the Upwork portfolio card.

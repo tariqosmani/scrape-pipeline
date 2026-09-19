@@ -3,3 +3,5 @@ data/
 *.log
 .env
 .trigger
+# Google's default name for a downloaded service-account key: <project-id>-<12 hex>.json
+*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].json

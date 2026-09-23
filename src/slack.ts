@@ -40,13 +40,13 @@ export function digest(run: RunRecord, sheetUrl: string | null, exportError: str
 
 function changeLines(run: RunRecord): string[] {
   const lines: string[] = [];
-  for (const item of run.changes.added) lines.push(`New: ${item[run.key] ?? ""}`);
-  for (const item of run.changes.removed) lines.push(`Removed: ${item[run.key] ?? ""}`);
+  for (const item of run.changes.added) lines.push(`New: ${item[run.label] ?? ""}`);
+  for (const item of run.changes.removed) lines.push(`Removed: ${item[run.label] ?? ""}`);
   for (const { key, before, after } of run.changes.changed) {
     const fields = run.fieldNames
       .filter((field) => before[field] !== after[field])
       .map((field) => `${field} ${before[field] ?? ""} → ${after[field] ?? ""}`);
-    lines.push(`Updated: ${key}: ${fields.join(", ")}`);
+    lines.push(`Updated: ${after[run.label] || key}: ${fields.join(", ")}`);
   }
   return lines;
 }

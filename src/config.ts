@@ -14,13 +14,16 @@ export const targetSchema = z.object({
   sheetTab: z.string().optional(),
   startUrl: z.url(),
   // "xml" for feeds such as the ECB's daily rates: tag names are case-sensitive there.
-  format: z.enum(["html", "xml"]).default("html"),
+  // "json" for an API: itemSelector and each field's selector are dotted paths, "" being the response itself.
+  format: z.enum(["html", "xml", "json"]).default("html"),
   maxPages: z.number().int().positive().default(1),
   requestDelayMs: z.number().int().min(0).default(1000),
   userAgent: z.string(),
   itemSelector: z.string(),
   fields: z.record(z.string(), fieldSchema),
   key: z.string(),
+  // The field alerts and the Changes tab name an item by. Defaults to key; set it when the key is an opaque ID.
+  label: z.string().optional(),
   nextPageSelector: z.string().optional(),
   minItemsExpected: z.number().int().min(0).default(1),
 });
@@ -37,8 +40,19 @@ export function parseTarget(raw: unknown, source: string): Target {
   if (!parsed.success) {
     throw new Error(`Invalid target config ${source}:\n${z.prettifyError(parsed.error)}`);
   }
-  if (!(parsed.data.key in parsed.data.fields)) {
-    throw new Error(`Target "${parsed.data.name}": key "${parsed.data.key}" is not one of the configured fields.`);
+  const { name, key, label, fields, format, nextPageSelector } = parsed.data;
+  if (!(key in fields)) {
+    throw new Error(`Target "${name}": key "${key}" is not one of the configured fields.`);
+  }
+  if (label !== undefined && !(label in fields)) {
+    throw new Error(`Target "${name}": label "${label}" is not one of the configured fields.`);
+  }
+  if (format === "json") {
+    const bad = Object.entries(fields).filter(([, f]) => f.selector === undefined || f.attr !== undefined);
+    if (bad.length > 0) {
+      throw new Error(`Target "${name}": JSON fields need a "selector" path and no "attr": ${bad.map(([n]) => n).join(", ")}`);
+    }
+    if (nextPageSelector) throw new Error(`Target "${name}": JSON targets do not paginate; remove "nextPageSelector".`);
   }
   return parsed.data;
 }

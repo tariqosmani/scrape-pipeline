@@ -42,10 +42,10 @@ the file still belongs in `~/.config`.
 ```bash
 npm start                          # run the books.toscrape.com demo target
 npm run all                        # every registered target at once, one process each, output per target
-npm run run -- --target <name>     # one registered target by name (books-demo, quotes-demo, ecb-rates)
+npm run run -- --target <name>     # one registered target by name (books-demo, quotes-demo, ecb-rates, cpsc-recalls)
 npm run run -- targets/<name>.json # any target file, registered or not
 npm run typecheck                  # tsc --noEmit (types only; nothing is emitted)
-npm test                           # node --test: normalizePrivateKey, XML/HTML extraction, sheet cell types
+npm test                           # node --test: normalizePrivateKey, XML/HTML/JSON extraction, sheet cell types
 npm run dev:trigger                # Trigger.dev dev server: runs tasks locally against the dev environment
 ```
 
@@ -64,7 +64,9 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
 - **`src/fetch.ts`** — the politeness layer: robots.txt (cached per origin, honors `Crawl-delay`),
   per-request delay, retry with backoff on 429/5xx, descriptive User-Agent.
 - **`src/extract.ts`** — Cheerio extraction driven by the config's selectors (HTML, or XML when the
-  target sets `"format": "xml"`), plus `fillRates()`.
+  target sets `"format": "xml"`), dotted-path extraction for `"format": "json"`, plus `fillRates()`.
+  A JSON response that does not parse or has no list at `itemSelector` (an HTML block page or an API
+  error object served with a 200) throws, so the run fails instead of logging every item as Removed.
 - **`src/targets.ts`** — the registry of targets the Trigger.dev tasks and `npm run all` run. It imports
   each `targets/*.json` into the bundle, since a deployed run has no `targets/` folder. **A new site is a
   JSON file plus one line here**; its sheet tabs appear on its first run.
@@ -80,7 +82,9 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
 - **`src/trigger/scrape.ts`** — two Trigger.dev tasks. `scrape-target` runs one registered site (payload
   `{ "target": "<name>" }`) and throws on failure so the run shows Failed. `scrape-all` fans out one
   `scrape-target` child run per site with `batchTriggerAndWait`, so the sites run in parallel with their
-  own logs and status, and fails if any child failed. Both throw before crawling when any of the four
+  own logs and status, and fails if any child failed. `scrape-all` is a `schedules.task` with a declarative
+  cron: **17:00 Europe/Berlin, Monday to Friday, Production only** (after the ECB's ~16:00 CET publish).
+  The schedule deploys with the code; Development runs stay manual. Both throw before crawling when any of the four
   `SCRAPE_PIPELINE_*` vars is missing: unlike the CLI, a cloud run has no disk to fall back to, so it
   would otherwise pass green while writing nothing. `retry.maxAttempts` is `1` on purpose: a retry would
   append a second Runs row and send the Slack alert twice.
@@ -101,7 +105,8 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
 
 One JSON file per site in `targets/`, registered in `src/targets.ts`. `key` must name one of the
 `fields` and must be stable — the diff is keyed on it. `name` is lowercase letters, digits and hyphens
-(it becomes a file name and a tab name). Current targets: `books.json`, `quotes.json`, `ecb-rates.json`.
+(it becomes a file name and a tab name). Current targets: `books.json`, `quotes.json`, `ecb-rates.json`,
+`cpsc-recalls.json`.
 
 ```json
 {
@@ -125,6 +130,17 @@ One JSON file per site in `targets/`, registered in `src/targets.ts`. `key` must
 Omit `attr` to take the element's text. Omit `selector` to read from the item element itself, and set
 `"format": "xml"` for an XML feed. `ecb-rates.json` uses both: `"itemSelector": "Cube[currency]"` with
 fields `{ "attr": "currency" }` and `{ "attr": "rate" }`. `sheetTab` defaults to `name`.
+
+Set `"format": "json"` for an API. `itemSelector` is then a dotted path to the list of items (`""` when
+the response is the list itself), and every field needs a `selector` path, where a number indexes an
+array (`"Products.0.Name"`), and no `attr`. Missing values become `""`, so the fill-rate check still
+catches a renamed field. JSON targets make one request per run; `nextPageSelector` is rejected.
+
+`label` (optional, defaults to `key`) names the field that Slack alerts and the Changes tab's Item column
+show. Set it when the key is an opaque ID: `cpsc-recalls.json` keys on `recall` (the CPSC recall number)
+but labels by `title`. It reads the US CPSC recalls API (`saferproducts.gov`, keyless, robots.txt is a
+404) with `RecallDateStart=2026-01-01` in the URL, so the list only grows: a new recall is a New row, and
+a CPSC edit shows as an Updated `published` date.
 
 ## Health checks (the differentiating feature)
 
@@ -187,8 +203,9 @@ The GitHub repo is connected in the dashboard: **every push to `main` deploys to
   `import.meta.dirname`-relative path lands in a throwaway build folder), and cloud runs keep no files
   at all. That is why the snapshot lives in the sheet's Snapshot tab. Never reintroduce run state on
   local disk.
-- **To test in the dashboard:** run `scrape-all` with payload `{}` (every site, in parallel), or
-  `scrape-target` with `{ "target": "ecb-rates" }` for one site. `scrape-books-demo` no longer exists.
+- **To test in the dashboard:** run `scrape-all` (every site, in parallel; it ignores its scheduled
+  payload), or `scrape-target` with `{ "target": "ecb-rates" }` for one site. `scrape-books-demo` no
+  longer exists.
 
 ## Known workaround
 
@@ -216,7 +233,7 @@ deleted in the `invoice-472509` console.
 
 | Tab | Columns | Behavior |
 |---|---|---|
-| **Books** · **ECB Rates** · **Quotes** | The target's fields (title-cased) · Target · Scraped At | One tab per target (`sheetTab`), its current dataset, one row per item, replaced each healthy run. Prices (£) and decimals are numbers; Scraped At is a date serial. Filter on the header. Books was the original `Items` tab, renamed 2026-09-19. |
+| **Books** · **ECB Rates** · **Quotes** · **CPSC Recalls** | The target's fields (title-cased) · Target · Scraped At | One tab per target (`sheetTab`), its current dataset, one row per item, replaced each healthy run. Prices (£) and decimals are numbers; Scraped At is a date serial. Filter on the header. Books was the original `Items` tab, renamed 2026-09-19. |
 | **Changes** | Detected At · Target · Change · Item · Field · Before · After | Shared, append-only change log. Color rules match the exact words `New` / `Removed` / `Updated`. |
 | **Runs** | Run At · Target · Items · New · Removed · Updated · Fill Rates · Health · Notes | Shared, one row per run per target. Color rules match `Passed` / `Failed`. |
 | **Snapshot: `<name>`** *(hidden, one per target)* | Column A only: A1 = `{ target, runAt, itemCount, fillRates }` as JSON, A2 down = one item per row as JSON | The target's last good run, which its next run diffs against. Written in one `values:batchUpdate`; reads stop at `itemCount`, so leftover rows never count. A different target name in A1 fails the run. `Snapshot: books-demo` was the original `Snapshot` tab, renamed 2026-09-19. |
@@ -270,9 +287,17 @@ Rates and Quotes tabs and their snapshot tabs, and a second run diffed each agai
 changes**: the ECB publishes new rates each business day around 16:00 CET, so from the next business day
 it writes real Updated rows to Changes and sends a real Slack alert.
 
+**Scheduled in Production (2026-09-23).** `scrape-all` became a `schedules.task` (commit `3619aee`),
+weekdays 17:00 Europe/Berlin.
+
+**JSON source type and `cpsc-recalls`, verified locally (2026-09-23).** A run with no Google or Slack vars
+(local snapshot only, nothing written to the sheet) read 448 recalls, every field at 100% fill, health
+Passed. A simulated change, never written to the sheet, produced the alert lines
+`New: <recall title>` and `Updated: <recall title>: published … → …`. Its sheet tabs appear on its first
+Production run; that run is a baseline and sends no alert.
+
 **SEC EDGAR is not a target:** its robots.txt disallows `/cgi-bin/browse-edgar`, so the pipeline would
-refuse it. It needs the official `data.sec.gov` JSON API, which needs a JSON source type (not built) and a
+refuse it. The official `data.sec.gov` JSON API would work with the JSON source type, but it needs a
 User-Agent with a contact email.
 
-Not built yet, in rough priority order: a schedule on `scrape-all`, a JSON source type (for SEC EDGAR and
-other APIs), and the Upwork portfolio card.
+Not built yet: JSON pagination (one request per JSON target today), and the Upwork portfolio card.

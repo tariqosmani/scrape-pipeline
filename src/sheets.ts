@@ -26,7 +26,8 @@ export function sheetTabs(target: Target): SheetTabs {
 export type RunRecord = {
   target: string;
   runAt: string;
-  key: string;
+  /** The field that names an item in Changes and alerts. */
+  label: string;
   fieldNames: string[];
   items: Item[];
   fillRates: Record<string, number>;
@@ -160,12 +161,12 @@ export function itemRow(item: Item, run: RunRecord, at: number): Cell[] {
 
 export function changeRows(run: RunRecord, at: number): Cell[][] {
   const rows: Cell[][] = [];
-  for (const item of run.changes.added) rows.push([at, run.target, "New", item[run.key] ?? "", "", "", ""]);
-  for (const item of run.changes.removed) rows.push([at, run.target, "Removed", item[run.key] ?? "", "", "", ""]);
+  for (const item of run.changes.added) rows.push([at, run.target, "New", item[run.label] ?? "", "", "", ""]);
+  for (const item of run.changes.removed) rows.push([at, run.target, "Removed", item[run.label] ?? "", "", "", ""]);
   for (const { key, before, after } of run.changes.changed) {
     for (const field of run.fieldNames) {
       if (before[field] !== after[field]) {
-        rows.push([at, run.target, "Updated", key, field, before[field] ?? "", after[field] ?? ""]);
+        rows.push([at, run.target, "Updated", after[run.label] || key, field, before[field] ?? "", after[field] ?? ""]);
       }
     }
   }

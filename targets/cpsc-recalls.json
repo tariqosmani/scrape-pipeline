@@ -1,0 +1,24 @@
+{
+  "name": "cpsc-recalls",
+  "sheetTab": "CPSC Recalls",
+  "format": "json",
+  "startUrl": "https://www.saferproducts.gov/RestWebServices/Recall?format=json&RecallDateStart=2026-01-01",
+  "maxPages": 1,
+  "requestDelayMs": 1000,
+  "userAgent": "scrape-pipeline/0.1 (portfolio demo; +https://smartaiworkspace.tech)",
+  "itemSelector": "",
+  "fields": {
+    "recall": { "selector": "RecallNumber" },
+    "date": { "selector": "RecallDate" },
+    "title": { "selector": "Title" },
+    "product": { "selector": "Products.0.Name" },
+    "units": { "selector": "Products.0.NumberOfUnits" },
+    "remedy": { "selector": "RemedyOptions.0.Option" },
+    "country": { "selector": "ManufacturerCountries.0.Country" },
+    "published": { "selector": "LastPublishDate" },
+    "link": { "selector": "URL" }
+  },
+  "key": "recall",
+  "label": "title",
+  "minItemsExpected": 400
+}

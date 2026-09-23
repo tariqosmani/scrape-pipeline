@@ -97,7 +97,7 @@ export async function runPipeline(target: Target): Promise<PipelineResult> {
   const run: RunRecord = {
     target: target.name,
     runAt,
-    key: target.key,
+    label: target.label ?? target.key,
     fieldNames,
     items,
     fillRates: rates,

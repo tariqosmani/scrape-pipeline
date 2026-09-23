@@ -6,6 +6,9 @@ Point it at a website, an XML feed or a JSON API. Every run it pulls the data, c
 sane, compares it with the last good run, and logs every new, removed and changed row to Google
 Sheets. Slack only hears about the changes that matter, biggest move first.
 
+**[Open the live Google Sheet](https://docs.google.com/spreadsheets/d/1IRCSdaUuFZKBOvFb3qUEo_snI_PP89MkZhrNpmrdIgk/edit)**
+(view only). The pipeline writes to it every weekday: current data, the change log, and every run.
+
 ## What an alert looks like
 
 This is the real first change it caught in production: the European Central Bank's daily exchange

@@ -1,4 +1,4 @@
-import { task } from "@trigger.dev/sdk";
+import { schedules, task } from "@trigger.dev/sdk";
 import { runPipeline } from "../pipeline.ts";
 import { sheetsConfigFromEnv } from "../sheets.ts";
 import { targets } from "../targets.ts";
@@ -41,10 +41,14 @@ export const scrapeTarget = task({
   },
 });
 
-/** Every registered site at the same time, one child run each, so each site has its own logs and status. */
-export const scrapeAll = task({
+/**
+ * Every registered site at the same time, one child run each, so each site has its own logs and
+ * status. Scheduled after the ECB's ~16:00 CET rate publish so ecb-rates sees the day's change.
+ */
+export const scrapeAll = schedules.task({
   id: "scrape-all",
   retry: { maxAttempts: 1 },
+  cron: { pattern: "0 17 * * 1-5", timezone: "Europe/Berlin", environments: ["PRODUCTION"] },
   run: async () => {
     requireEnv();
     const { runs } = await scrapeTarget.batchTriggerAndWait(targets.map((t) => ({ payload: { target: t.name } })));

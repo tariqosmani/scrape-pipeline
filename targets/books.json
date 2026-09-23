@@ -13,5 +13,6 @@
   },
   "key": "title",
   "nextPageSelector": "li.next a",
-  "minItemsExpected": 40
+  "minItemsExpected": 40,
+  "alerts": { "minChangePct": 5 }
 }

@@ -12,5 +12,6 @@
     "rate": { "attr": "rate" }
   },
   "key": "currency",
-  "minItemsExpected": 25
+  "minItemsExpected": 25,
+  "alerts": { "minChangePct": 0.5 }
 }

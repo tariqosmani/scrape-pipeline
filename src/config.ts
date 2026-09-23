@@ -26,6 +26,15 @@ export const targetSchema = z.object({
   label: z.string().optional(),
   nextPageSelector: z.string().optional(),
   minItemsExpected: z.number().int().min(0).default(1),
+  // Slack only: the sheet's Changes tab still records every change.
+  alerts: z
+    .object({
+      // A numeric field (price, rate) alerts only when it moves at least this many percent.
+      minChangePct: z.number().min(0).default(0),
+      // Fields whose changes never alert, e.g. a view count.
+      ignore: z.array(z.string()).default([]),
+    })
+    .default({ minChangePct: 0, ignore: [] }),
 });
 
 export type Target = z.infer<typeof targetSchema>;
@@ -40,7 +49,11 @@ export function parseTarget(raw: unknown, source: string): Target {
   if (!parsed.success) {
     throw new Error(`Invalid target config ${source}:\n${z.prettifyError(parsed.error)}`);
   }
-  const { name, key, label, fields, format, nextPageSelector } = parsed.data;
+  const { name, key, label, fields, format, nextPageSelector, alerts } = parsed.data;
+  const unknownIgnored = alerts.ignore.filter((field) => !(field in fields));
+  if (unknownIgnored.length > 0) {
+    throw new Error(`Target "${name}": alerts.ignore names unknown field(s): ${unknownIgnored.join(", ")}`);
+  }
   if (!(key in fields)) {
     throw new Error(`Target "${name}": key "${key}" is not one of the configured fields.`);
   }

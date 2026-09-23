@@ -20,11 +20,13 @@ export function digest(run: RunRecord, sheetUrl: string | null, exportError: str
       "Last good snapshot kept. Nothing was written to Items or Changes.",
     );
   } else if (!run.isBaseline) {
-    const lines = changeLines(run);
+    // Only minor updates means no message at all: the sheet still has them.
+    const { lines, minor } = changeLines(run);
     if (lines.length > 0) {
       const { added, removed, changed } = run.changes;
       const shown = lines.slice(0, MAX_LINES);
       if (lines.length > MAX_LINES) shown.push(`…and ${lines.length - MAX_LINES} more`);
+      if (minor > 0) shown.push(`…plus ${minor} minor update${minor === 1 ? "" : "s"}, listed in the Sheet`);
       parts.push(
         `${run.target}: ${added.length} new, ${removed.length} removed, ${changed.length} updated`,
         shown.join("\n"),
@@ -38,17 +40,57 @@ export function digest(run: RunRecord, sheetUrl: string | null, exportError: str
   return parts.join("\n\n").slice(0, MAX_LENGTH);
 }
 
-function changeLines(run: RunRecord): string[] {
-  const lines: string[] = [];
-  for (const item of run.changes.added) lines.push(`New: ${item[run.label] ?? ""}`);
-  for (const item of run.changes.removed) lines.push(`Removed: ${item[run.label] ?? ""}`);
+/**
+ * New and Removed always alert. An update alerts when one of its non-ignored fields changed text, or
+ * moved at least alerts.minChangePct percent; updates are listed biggest move first.
+ * ponytail: compares against the last run only, so a drift that stays under the threshold each run never
+ * alerts; compare against the last alerted value if a client needs that.
+ */
+function changeLines(run: RunRecord): { lines: string[]; minor: number } {
+  const lines = [
+    ...run.changes.added.map((item) => `New: ${item[run.label] ?? ""}`),
+    ...run.changes.removed.map((item) => `Removed: ${item[run.label] ?? ""}`),
+  ];
+  const updates: { text: string; weight: number }[] = [];
+  let minor = 0;
   for (const { key, before, after } of run.changes.changed) {
     const fields = run.fieldNames
-      .filter((field) => before[field] !== after[field])
-      .map((field) => `${field} ${before[field] ?? ""} → ${after[field] ?? ""}`);
-    lines.push(`Updated: ${after[run.label] || key}: ${fields.join(", ")}`);
+      .filter((field) => before[field] !== after[field] && !run.alerts.ignore.includes(field))
+      .map((field) => ({ field, pct: pctChange(before[field] ?? "", after[field] ?? "") }))
+      .filter(({ pct }) => pct === null || Math.abs(pct) >= run.alerts.minChangePct);
+    if (fields.length === 0) {
+      minor++;
+      continue;
+    }
+    const described = fields.map(
+      ({ field, pct }) => `${field} ${before[field] ?? ""} → ${after[field] ?? ""}${pct === null ? "" : ` (${formatPct(pct)})`}`,
+    );
+    updates.push({
+      text: `Updated: ${after[run.label] || key}: ${described.join(", ")}`,
+      // A text change such as "In stock" → "Out of stock" has no size, so it sorts first.
+      weight: Math.max(...fields.map(({ pct }) => (pct === null ? Number.MAX_VALUE : Math.abs(pct)))),
+    });
   }
-  return lines;
+  updates.sort((a, b) => b.weight - a.weight);
+  return { lines: [...lines, ...updates.map((update) => update.text)], minor };
+}
+
+/** Percent change between two plain numbers, or null when either is not one (or the old value is 0). */
+function pctChange(before: string, after: string): number | null {
+  const from = toNumber(before);
+  const to = toNumber(after);
+  if (from === null || to === null || from === 0) return null;
+  return ((to - from) / Math.abs(from)) * 100;
+}
+
+// "£51.77", "1,234", "-0.5" are numbers; "About 38,507" or "In stock (3 available)" are text.
+function toNumber(value: string): number | null {
+  return /^-?[£$€]?\s?\d[\d,]*(\.\d+)?$/.test(value) ? Number(value.replace(/[^\d.-]/g, "")) : null;
+}
+
+function formatPct(pct: number): string {
+  const size = Math.abs(pct);
+  return `${pct < 0 ? "−" : "+"}${size.toFixed(size < 1 ? 2 : 1)}%`;
 }
 
 // Scraped text must arrive as plain text. mrkdwn:false stops * _ ~ from formatting, and Slack requires

@@ -98,6 +98,7 @@ export async function runPipeline(target: Target): Promise<PipelineResult> {
     target: target.name,
     runAt,
     label: target.label ?? target.key,
+    alerts: target.alerts,
     fieldNames,
     items,
     fillRates: rates,

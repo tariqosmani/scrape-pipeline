@@ -45,7 +45,7 @@ npm run all                        # every registered target at once, one proces
 npm run run -- --target <name>     # one registered target by name (books-demo, quotes-demo, ecb-rates, cpsc-recalls)
 npm run run -- targets/<name>.json # any target file, registered or not
 npm run typecheck                  # tsc --noEmit (types only; nothing is emitted)
-npm test                           # node --test: normalizePrivateKey, XML/HTML/JSON extraction, sheet cell types
+npm test                           # node --test: normalizePrivateKey, XML/HTML/JSON extraction, sheet cell types, alert thresholds
 npm run dev:trigger                # Trigger.dev dev server: runs tasks locally against the dev environment
 ```
 
@@ -95,7 +95,11 @@ targets/*.json  →  config.ts (validate)  →  fetch.ts (polite GET)  →  extr
   Snapshot tab (see Google Sheet).
 - **`src/slack.ts`** — the "what changed" alert, posted to a Slack incoming webhook. `digest()` returns
   the message text, or `null` for a quiet healthy run or a baseline, so the channel only hears about it
-  when something changed, the health check failed, or the Sheets export failed. Sent with
+  when something changed, the health check failed, or the Sheets export failed. The target's `alerts`
+  settings filter Updated lines only (see Target config format); a numeric change shows its percent
+  (`rate 364.28 → 361.58 (−0.74%)`), updates are listed biggest move first, and a closing line counts the
+  minor ones. A run with only minor updates sends nothing. It compares against the last run only, so a
+  drift that stays under the threshold on every run never alerts. Sent with
   `mrkdwn: false` and `&` `<` `>` escaped, so a scraped `<!channel>` or `<url|text>` cannot ping the
   channel or fake a link. Capped at 15 change lines and 4096 characters. Errors carry Slack's reason
   (`no_service`, `invalid_payload`) but never the webhook URL, which is the secret. Skipped when
@@ -141,6 +145,11 @@ show. Set it when the key is an opaque ID: `cpsc-recalls.json` keys on `recall` 
 but labels by `title`. It reads the US CPSC recalls API (`saferproducts.gov`, keyless, robots.txt is a
 404) with `RecallDateStart=2026-01-01` in the URL, so the list only grows: a new recall is a New row, and
 a CPSC edit shows as an Updated `published` date.
+
+`alerts` (optional) quiets Slack; the Changes tab still records every change. `minChangePct` (default 0):
+a numeric field (`£51.77`, `1,234`, `0.9393`) must move at least this percent to alert. Text changes
+(`In stock` → `Out of stock`, or a value like `About 38,507`) always alert. `ignore` (default `[]`):
+fields that never alert. New and Removed items always alert. Set now: `ecb-rates` 0.5, `books-demo` 5.
 
 ## Health checks (the differentiating feature)
 
@@ -242,9 +251,10 @@ deleted in the `invoice-472509` console.
 the existing header style, a filter and the date format, placed before Changes, plus its hidden Snapshot
 tab. Nothing needs setting up by hand.
 
-Seeded with the 2026-09-17 19:40 baseline snapshot (60 books, health Passed). **Changes is empty on
-purpose:** no real change has happened yet, and the faked diff used to test change detection was
-never written to the sheet. Keep it that way — portfolio screenshots only show real data.
+Seeded with the 2026-09-17 19:40 baseline snapshot (60 books, health Passed). **Changes holds only real
+changes:** its first rows are ecb-rates' 29 Updated rates from the 2026-09-23 13:33 run. The faked diffs
+used to test change detection were never written to the sheet. Keep it that way — portfolio screenshots
+only show real data.
 
 Write scraped values with `valueInputOption: RAW`. `USER_ENTERED` would execute a scraped value
 that starts with `=` as a formula.
@@ -293,8 +303,17 @@ weekdays 17:00 Europe/Berlin.
 **JSON source type and `cpsc-recalls`, verified locally (2026-09-23).** A run with no Google or Slack vars
 (local snapshot only, nothing written to the sheet) read 448 recalls, every field at 100% fill, health
 Passed. A simulated change, never written to the sheet, produced the alert lines
-`New: <recall title>` and `Updated: <recall title>: published … → …`. Its sheet tabs appear on its first
-Production run; that run is a baseline and sends no alert.
+`New: <recall title>` and `Updated: <recall title>: published … → …`.
+
+**First real change alert, in Production (2026-09-23).** A dashboard Test run of `scrape-all` at 13:33
+(Asia/Karachi), after the deploy of `e82668a`, passed for all four targets. ecb-rates wrote 29 Updated
+rows to Changes and its Slack alert reached the channel. cpsc-recalls created its CPSC Recalls tab and
+saved its baseline without an alert.
+
+**Alert thresholds, checked on real data (2026-09-23).** Replaying the ECB's own 90-day history through
+`digest()` with `minChangePct` 0.5: the 2026-09-18 → 09-22 change behind the first real alert (29 lines,
+biggest move KRW −2.3% buried under "…and 14 more") becomes 7 lines led by KRW, plus "22 minor
+updates"; a single day (09-21 → 09-22) becomes 4 lines. Nothing was sent or written.
 
 **SEC EDGAR is not a target:** its robots.txt disallows `/cgi-bin/browse-edgar`, so the pipeline would
 refuse it. The official `data.sec.gov` JSON API would work with the JSON source type, but it needs a

@@ -28,6 +28,7 @@ export type RunRecord = {
   runAt: string;
   /** The field that names an item in Changes and alerts. */
   label: string;
+  alerts: Target["alerts"];
   fieldNames: string[];
   items: Item[];
   fillRates: Record<string, number>;

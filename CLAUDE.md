@@ -1,15 +1,14 @@
 # scrape-pipeline — CLAUDE.md
-*Part of Tariq_Osmani_OS — see root CLAUDE.md for AIOS context.*
+
+Engineering guide for working on this repo with Claude Code. Private, machine-specific notes (accounts,
+IDs, run history) go in `CLAUDE.local.md`, which is git-ignored and loaded alongside this file.
 
 ## Project Overview
 
 A scheduled web data pipeline. It scrapes a target site, validates what it got, compares the
 result against the previous run, and reports **what changed** — new rows, removed rows, and
-changed fields. Built as an Upwork portfolio piece: the catalog has no scraping proof and no
-live TypeScript proof, and the job-screener data shows recurring scrape-and-diff pipelines
-(scores 88 and 93) are the well-paid shape of this work, not one-off list building.
-
-Selling line: *"tell me what changed"*, not *"I scraped a page"*.
+changed fields. The product is the change report and the refusal to report success over bad data,
+not the scraping itself.
 
 ## Runtime
 
@@ -20,22 +19,14 @@ Run `.ts` files directly with `node`. Because of type stripping, all type-only i
 
 ## Env vars
 
-This project keeps its **own `.env`** in `projects/scrape-pipeline/` (git-ignored), a deliberate
-exception to the root rule that projects read the shared root `.env`: it is built to deploy on its
-own. Keys: `SCRAPE_PIPELINE_SERVICE_ACCOUNT_EMAIL`, `SCRAPE_PIPELINE_SERVICE_ACCOUNT_PRIVATE_KEY`
+Local runs read a git-ignored `.env` in the project root; a deployed host sets the same variables
+directly. Keys: `SCRAPE_PIPELINE_SERVICE_ACCOUNT_EMAIL`, `SCRAPE_PIPELINE_SERVICE_ACCOUNT_PRIVATE_KEY`
 (in double quotes, either one line with `\n` escapes or the PEM across real lines; both load),
 `SCRAPE_PIPELINE_SHEET_ID`, `SCRAPE_PIPELINE_SLACK_WEBHOOK_URL`. Google Sheets access is a service
 account, not an API key: an API key can only read public sheets and cannot write.
 
-**Alerts go to Slack, not Telegram (switched 2026-09-18).** Telegram was dropped partly because
-`api.telegram.org` is blocked on Tariq's local network (TLS handshake reset), so it could never be
-tested from this PC. Slack's `hooks.slack.com` is reachable here. The old `SCRAPE_PIPELINE_TELEGRAM_*`
-lines may still sit in `.env`; nothing reads them.
-
-The original JSON key file is kept **outside the repo** at `~/.config/scrape-pipeline/service-account.json`.
-Never place a key file inside the project. Google's default name (`<project-id>-<12 hex>.json`) is now
-covered by a `.gitignore` rule (added 2026-09-19, after a key was saved into the project folder), but
-the file still belongs in `~/.config`.
+Never place a service-account key file inside the project. Google's default key file name
+(`<project-id>-<12 hex>.json`) is covered by a `.gitignore` rule as a backstop.
 
 ## Commands
 
@@ -171,10 +162,10 @@ as a first run would silently swallow every change since the last good run.
 ## Rules
 
 - **Public data only.** No login-gated or paywalled pages, no CAPTCHA solving, no fingerprint or
-  TLS spoofing, no proxy rotation for evasion. This has to be publicly showable and sellable —
-  the good-citizen posture *is* the product, and it is the legal posture after *Meta v. Bright Data*.
+  TLS spoofing, no proxy rotation for evasion. The good-citizen posture *is* the product, and it is
+  the legal posture after *Meta v. Bright Data*.
 - **Never demo against** LinkedIn, Meta, Amazon, Zillow, Indeed, or Google Maps. Safe targets:
-  `books.toscrape.com`, `quotes.toscrape.com`, `scrapethissite.com`, SEC EDGAR, open-data portals.
+  `books.toscrape.com`, `quotes.toscrape.com`, `scrapethissite.com`, open-data portals and official APIs.
 - **Check for a JSON/XHR endpoint or an official API before scraping HTML.** Most "hard" sites
   hand over JSON directly.
 - **Plain HTTP first.** Only reach for a headless browser when content is genuinely client-rendered.
@@ -182,11 +173,14 @@ as a first run would silently swallow every change since the last good run.
 - **No personal contact data** in demo targets (GDPR exposure; CNIL fined Kaspr €240k for this).
 - Keep dependencies minimal. Current set: `cheerio`, `zod`, `robots-parser`, `@trigger.dev/sdk`. Node's
   built-in `fetch` covers HTTP.
+- **SEC EDGAR is not an HTML target:** its robots.txt disallows `/cgi-bin/browse-edgar`, so the pipeline
+  refuses it. The official `data.sec.gov` JSON API would work with the JSON source type, but it needs a
+  User-Agent with a contact email.
 
 ## Trigger.dev
 
-Project **"Upwork Trigger"** (`proj_rozkxmfiedxeuvegkfph`, org Smart AI Workspace), runtime `node-24`.
-The GitHub repo is connected in the dashboard: **every push to `main` deploys to Production.**
+Runtime `node-24`; the project ref is in `trigger.config.ts`. With the GitHub integration connected,
+**every push to `main` deploys to Production.**
 
 - `@trigger.dev/sdk`, `@trigger.dev/build` and `trigger.dev` are pinned to the **exact same version**
   (no `^`). Without a TTY the CLI treats the run as CI and aborts on any version mismatch.
@@ -195,16 +189,12 @@ The GitHub repo is connected in the dashboard: **every push to `main` deploys to
   Prefer `npx trigger.dev env set --env prod --secret -- <NAME> <value>` over the dashboard's bulk paste.
   The `--` is required for the private key: a value starting with `-----BEGIN` is otherwise parsed as an
   unknown option, and the CLI's error message echoes the whole value back.
-- **The private key's line breaks do not always survive that dashboard.** A first Production test
-  failed with `error:1E08010C:DECODER routines::unsupported` from `Sign.sign` — the multi-line PEM was
-  mangled by the dashboard's "paste all your .env values at once" bulk import. A later Production run
-  hit the same error again with the line breaks collapsed away entirely (no `\n` left in any form),
-  a shape the first fix didn't cover since it only replaced known escape patterns. `normalizePrivateKey()`
-  in `sheets.ts` no longer pattern-matches paste shapes: it pulls the base64 body out from between the
-  `BEGIN`/`END` markers and rebuilds a standard PEM, so any whitespace damage — quotes, CRLF, `\n`
-  escapes, or line breaks gone entirely — is irrelevant. Checked in `sheets.test.ts` (`npm test`) by
-  re-signing and verifying against a real key pair for each mangled shape, not just that parsing doesn't
-  throw.
+- **The private key's line breaks do not always survive a dashboard paste** (seen as
+  `error:1E08010C:DECODER routines::unsupported` from `Sign.sign`, with the line breaks mangled or gone
+  entirely). `normalizePrivateKey()` in `sheets.ts` therefore does not pattern-match paste shapes: it
+  pulls the base64 body out from between the `BEGIN`/`END` markers and rebuilds a standard PEM, so any
+  whitespace damage — quotes, CRLF, `\n` escapes, or no line breaks at all — is irrelevant. Checked in
+  `sheets.test.ts` by re-signing and verifying against a real key pair for each mangled shape.
 - The bundler warns `Unrecognized target environment "es2024"` from `tsconfig.json`. Harmless.
 - `npm audit` flags packages inside Trigger.dev itself; the only offered "fix" downgrades to v1/v2.
   Do not run `npm audit fix --force`.
@@ -213,8 +203,7 @@ The GitHub repo is connected in the dashboard: **every push to `main` deploys to
   at all. That is why the snapshot lives in the sheet's Snapshot tab. Never reintroduce run state on
   local disk.
 - **To test in the dashboard:** run `scrape-all` (every site, in parallel; it ignores its scheduled
-  payload), or `scrape-target` with `{ "target": "ecb-rates" }` for one site. `scrape-books-demo` no
-  longer exists.
+  payload), or `scrape-target` with `{ "target": "ecb-rates" }` for one site.
 
 ## Known workaround
 
@@ -224,99 +213,29 @@ casts. Remove that cast if upstream fixes the typings.
 
 ## Google Sheet (output destination)
 
-**"Scrape Pipeline — Data Feed"** — ID `1IRCSdaUuFZKBOvFb3qUEo_snI_PP89MkZhrNpmrdIgk`
-(https://docs.google.com/spreadsheets/d/1IRCSdaUuFZKBOvFb3qUEo_snI_PP89MkZhrNpmrdIgk/edit).
-Created 2026-09-17 with the `gws` CLI, timezone Asia/Karachi. **The Sheets export must write to
-this sheet and these columns — do not create a new sheet.**
-
-Written by the service account `scrape-pipeline@scrape-pipeline-509110.iam.gserviceaccount.com`. It lives
-in its own GCP project **`scrape-pipeline-509110`** (created 2026-09-19), with only the Google Sheets API
-enabled and no project roles. It is shared on the sheet as **Editor**; without that share every write fails with
-`403: The caller does not have permission`. The date serials in `sheets.ts` assume the sheet's
-UTC+5 timezone — change `SHEET_UTC_OFFSET_HOURS` if the sheet's timezone ever changes.
-
-**Moved from `invoice-472509` on 2026-09-19.** The old account `scrape-pipeline@invoice-472509` had its
-key partly printed to a terminal and chat by a setup script, so the pipeline got its own project and a
-new account. The old account's share on the sheet was removed the same day; the account itself is to be
-deleted in the `invoice-472509` console.
+The sheet ID comes from `SCRAPE_PIPELINE_SHEET_ID`. The service account must be shared on the sheet as
+**Editor**; without that share every write fails with `403: The caller does not have permission`. The
+date serials in `sheets.ts` assume the sheet's UTC+5 timezone — change `SHEET_UTC_OFFSET_HOURS` if the
+sheet's timezone changes.
 
 | Tab | Columns | Behavior |
 |---|---|---|
-| **Books** · **ECB Rates** · **Quotes** · **CPSC Recalls** | The target's fields (title-cased) · Target · Scraped At | One tab per target (`sheetTab`), its current dataset, one row per item, replaced each healthy run. Prices (£) and decimals are numbers; Scraped At is a date serial. Filter on the header. Books was the original `Items` tab, renamed 2026-09-19. |
+| **Books** · **ECB Rates** · **Quotes** · **CPSC Recalls** | The target's fields (title-cased) · Target · Scraped At | One tab per target (`sheetTab`), its current dataset, one row per item, replaced each healthy run. Prices (£) and decimals are numbers; Scraped At is a date serial. Filter on the header. |
 | **Changes** | Detected At · Target · Change · Item · Field · Before · After | Shared, append-only change log. Color rules match the exact words `New` / `Removed` / `Updated`. |
 | **Runs** | Run At · Target · Items · New · Removed · Updated · Fill Rates · Health · Notes | Shared, one row per run per target. Color rules match `Passed` / `Failed`. |
-| **Snapshot: `<name>`** *(hidden, one per target)* | Column A only: A1 = `{ target, runAt, itemCount, fillRates }` as JSON, A2 down = one item per row as JSON | The target's last good run, which its next run diffs against. Written in one `values:batchUpdate`; reads stop at `itemCount`, so leftover rows never count. A different target name in A1 fails the run. `Snapshot: books-demo` was the original `Snapshot` tab, renamed 2026-09-19. |
+| **Snapshot: `<name>`** *(hidden, one per target)* | Column A only: A1 = `{ target, runAt, itemCount, fillRates }` as JSON, A2 down = one item per row as JSON | The target's last good run, which its next run diffs against. Written in one `values:batchUpdate`; reads stop at `itemCount`, so leftover rows never count. A different target name in A1 fails the run. |
 
 **A new target's tabs are created on its first run** (`ensureTabs()` in `sheets.ts`): the Items tab with
 the existing header style, a filter and the date format, placed before Changes, plus its hidden Snapshot
 tab. Nothing needs setting up by hand.
 
-Seeded with the 2026-09-17 19:40 baseline snapshot (60 books, health Passed). **Changes holds only real
-changes:** its first rows are ecb-rates' 29 Updated rates from the 2026-09-23 13:33 run. The faked diffs
-used to test change detection were never written to the sheet. Keep it that way — portfolio screenshots
-only show real data.
+**Only real data goes in the sheet.** Test change detection with a local snapshot (Google vars unset),
+never by writing faked diffs to the Changes tab.
 
 Write scraped values with `valueInputOption: RAW`. `USER_ENTERED` would execute a scraped value
 that starts with `=` as a formula.
 
 ## Status
 
-**Scrape → diff → Google Sheet working, verified end to end (2026-09-17).** The demo target pulls
-60 items across 3 pages, diffs against the previous snapshot, fails correctly on a broken selector,
-and each run writes itself into the sheet. Verified by reading the sheet back through a separate
-identity: Items refreshed, a Passed row on Runs, Changes empty because nothing changed.
-
-**Slack alert working (2026-09-18).** Replaced the Telegram alert. The message text, the escaping,
-and the error path are checked offline against a local fake webhook, and a test message through
-`sendMessage` reached the real channel (HTTP 200). The webhook belongs to Tariq's existing Slack app
-(Smart AI Workspace, app ID `A0ASA67NYAF`) with Incoming Webhooks switched on. No change alert has fired
-yet: books.toscrape.com never changes.
-
-**Snapshot moved into the sheet, verified (2026-09-17).** With `data/` moved aside, `npm start` still
-reported 0 changes (not "first run") and saved the snapshot back to the Snapshot tab.
-
-**Trigger.dev dev run verified (2026-09-18).** A dashboard Test run (`run_06gb85aa4clstqjbjdicuflc01`)
-succeeded in 12s: 60 items, 0 changes, a Passed row on Runs at 15:35, and the Snapshot tab advanced.
-`trigger dev` loads the project `.env` into local runs on its own. A Development run only executes while
-`npm run dev:trigger` is running on this PC; otherwise it waits as Queued.
-
-**First Production run, 2026-09-19 (`run_06gbib2a9sbf4inpn7ehln2te1`): Completed, but wrote nothing.**
-`env list --env prod` showed none of the `SCRAPE_PIPELINE_*` vars, so it logged "sheet: skipped" and
-"slack: skipped", saved its snapshot to `/app/src/data/` (discarded), and still returned `ok: true`. The
-task now fails in that case.
-
-**Production run verified (2026-09-19).** After the four vars were set with `env set` (new service account
-in `scrape-pipeline-509110`), `run_06gbiil3tmst8bohc8t7msaje1` at 15:51 read the snapshot from the sheet
-(0 changes, not a first run), refreshed Items, wrote a Passed Runs row, and advanced the Snapshot tab.
-Checked by reading all three tabs back through `gws`.
-
-**Three targets at once, verified locally (2026-09-19).** `npm run all` ran books-demo (60), quotes-demo
-(100 across 10 pages) and ecb-rates (29 currencies) in parallel in 22s, all Passed. It created the ECB
-Rates and Quotes tabs and their snapshot tabs, and a second run diffed each against its own snapshot
-(0 changes). Books kept its history through the tab rename. **ecb-rates is the first target that really
-changes**: the ECB publishes new rates each business day around 16:00 CET, so from the next business day
-it writes real Updated rows to Changes and sends a real Slack alert.
-
-**Scheduled in Production (2026-09-23).** `scrape-all` became a `schedules.task` (commit `3619aee`),
-weekdays 17:00 Europe/Berlin.
-
-**JSON source type and `cpsc-recalls`, verified locally (2026-09-23).** A run with no Google or Slack vars
-(local snapshot only, nothing written to the sheet) read 448 recalls, every field at 100% fill, health
-Passed. A simulated change, never written to the sheet, produced the alert lines
-`New: <recall title>` and `Updated: <recall title>: published … → …`.
-
-**First real change alert, in Production (2026-09-23).** A dashboard Test run of `scrape-all` at 13:33
-(Asia/Karachi), after the deploy of `e82668a`, passed for all four targets. ecb-rates wrote 29 Updated
-rows to Changes and its Slack alert reached the channel. cpsc-recalls created its CPSC Recalls tab and
-saved its baseline without an alert.
-
-**Alert thresholds, checked on real data (2026-09-23).** Replaying the ECB's own 90-day history through
-`digest()` with `minChangePct` 0.5: the 2026-09-18 → 09-22 change behind the first real alert (29 lines,
-biggest move KRW −2.3% buried under "…and 14 more") becomes 7 lines led by KRW, plus "22 minor
-updates"; a single day (09-21 → 09-22) becomes 4 lines. Nothing was sent or written.
-
-**SEC EDGAR is not a target:** its robots.txt disallows `/cgi-bin/browse-edgar`, so the pipeline would
-refuse it. The official `data.sec.gov` JSON API would work with the JSON source type, but it needs a
-User-Agent with a contact email.
-
-Not built yet: JSON pagination (one request per JSON target today), and the Upwork portfolio card.
+Running in Production: four targets (HTML, XML and JSON sources), weekdays 17:00 Europe/Berlin, with
+Google Sheets export and Slack alerts. Not built yet: JSON pagination (one request per JSON target today).
